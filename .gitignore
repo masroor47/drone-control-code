@@ -18,3 +18,9 @@ build/
 
 # esp-idf
 sdkconfig
+
+
+# data files
+**/*.txt
+**/*.csv
+**/*.png
