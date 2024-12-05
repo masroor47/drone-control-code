@@ -1,0 +1,20 @@
+# mac
+.DS_Store
+
+# python
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyz
+*.pyw
+
+# c++ build
+build/
+
+# vscode
+.vscode/
+
+# esp-idf
+sdkconfig
