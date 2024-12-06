@@ -1,9 +1,13 @@
 #include <stdio.h>
+#include <cmath>
 #include "esp_log.h"
 #include "sdkconfig.h"
 #include "esp_system.h"
 #include "driver/i2c.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/ledc.h"
+#include "esp_err.h"
 
 
 #define I2C_MASTER_SCL_IO           22      // SCL pin
@@ -30,7 +34,65 @@
 #define BMP280_REG_RESET        0xE0
 #define BMP280_REG_ID           0xD0
 
+#define SERVO_PIN GPIO_NUM_18
+
+// Servo PWM configuration
+#define SERVO_MIN_PULSEWIDTH_US 500  // Minimum pulse width in microseconds (0°)
+#define SERVO_MAX_PULSEWIDTH_US 2500 // Maximum pulse width in microseconds (180°)
+#define SERVO_MAX_DEGREE 180         // Maximum angle in degrees
+
 static const char *TAG = "Sensors";
+
+typedef struct {
+    float accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z;
+    float altitude;
+} SensorData;
+
+typedef struct {
+    float Kp;         // Proportional gain
+    float Ki;         // Integral gain
+    float Kd;         // Derivative gain
+    float prev_error; // Previous error for derivative term
+    float integral;   // Accumulated integral
+} PIDController;
+
+static PIDController pitch_pid;
+
+void pid_init(PIDController *pid, float Kp, float Ki, float Kd) {
+    pid->Kp = Kp;
+    pid->Ki = Ki;
+    pid->Kd = Kd;
+    pid->prev_error = 0.0f;
+    pid->integral = 0.0f;
+}
+
+float pid_calculate(PIDController *pid, float desired, float measured) {
+    // Calculate error
+    float error = desired - measured;
+
+    // Proportional term
+    float P_out = pid->Kp * error;
+
+    // Integral term
+    pid->integral += error;  // Accumulate error
+    float I_out = pid->Ki * pid->integral;
+
+    // Derivative term
+    float derivative = error - pid->prev_error;
+    float D_out = pid->Kd * derivative;
+
+    // Save current error for next derivative calculation
+    pid->prev_error = error;
+
+    // Compute total output
+    float output = P_out + I_out + D_out;
+    return output;
+}
+
+
+
+SensorData sensor_data;
+SemaphoreHandle_t sensor_data_mutex;
 
 struct bmp280_calib_param {
     uint16_t dig_T1;
@@ -47,6 +109,53 @@ struct bmp280_calib_param {
     int16_t  dig_P9;
     int32_t  t_fine;
 };
+
+void servo_init() {
+    // Configure the LEDC timer
+    ledc_timer_config_t timer_conf = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_13_BIT,  // 13-bit resolution for duty cycle
+        .timer_num = LEDC_TIMER_0,
+        .freq_hz = 50,                         // Servo PWM frequency (50Hz)
+        .clk_cfg = LEDC_AUTO_CLK
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&timer_conf));
+
+    // Configure the LEDC channel
+    ledc_channel_config_t chan_conf = {
+        .gpio_num = SERVO_PIN,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_0,  // Use channel 0
+        .intr_type = LEDC_INTR_DISABLE,
+        .timer_sel = LEDC_TIMER_0,
+        .duty = 0,                  // Initial duty cycle
+        .hpoint = 0
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&chan_conf));
+}
+
+static uint32_t servo_angle_to_pulsewidth(float angle) {
+    // Clamp the angle to the valid range
+    if (angle < 0) angle = 0;
+    if (angle > SERVO_MAX_DEGREE) angle = SERVO_MAX_DEGREE;
+
+    // Map angle to pulse width
+    return (uint32_t)(SERVO_MIN_PULSEWIDTH_US + 
+                      ((SERVO_MAX_PULSEWIDTH_US - SERVO_MIN_PULSEWIDTH_US) * (angle / SERVO_MAX_DEGREE)));
+}
+
+// Function to set the control surface (pitch for now)
+void set_control_surfaces(float pitch) {
+    // Convert pitch to pulse width
+    uint32_t pulse_width = servo_angle_to_pulsewidth(pitch);
+
+    // Calculate duty cycle for 13-bit resolution
+    uint32_t duty = (pulse_width * (1 << 13)) / 20000; // 20000us = 1/50Hz period
+
+    // Update the PWM duty cycle
+    ESP_ERROR_CHECK(ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty));
+    ESP_ERROR_CHECK(ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0));
+}
 
 
 esp_err_t i2c_master_init(void) {
@@ -294,7 +403,6 @@ public:
 
 static MPU6050Filter filter;
 
-
 // MPU6050 initialization
 static esp_err_t mpu6050_init(void)
 {
@@ -346,6 +454,7 @@ static esp_err_t mpu6050_read_data(int16_t* accel_x, int16_t* accel_y, int16_t* 
     return ret;
 }
 
+// Calibrate MPU6050
 static esp_err_t mpu6050_calibrate(int16_t* accel_offset_x, int16_t* accel_offset_y, int16_t* accel_offset_z,
                                   int16_t* gyro_offset_x, int16_t* gyro_offset_y, int16_t* gyro_offset_z) {
     const int num_samples = 1000;
@@ -360,7 +469,7 @@ static esp_err_t mpu6050_calibrate(int16_t* accel_offset_x, int16_t* accel_offse
         
         accel_x_sum += ax;
         accel_y_sum += ay;
-        accel_z_sum += az - 16384; // Remove 1g from z-axis
+        accel_z_sum += az;// - 16384; // Remove 1g from z-axis
         gyro_x_sum += gx;
         gyro_y_sum += gy;
         gyro_z_sum += gz;
@@ -378,39 +487,6 @@ static esp_err_t mpu6050_calibrate(int16_t* accel_offset_x, int16_t* accel_offse
     
     return ESP_OK;
 }
-
-// Sensor reading task
-// void sensor_reading_task(void *pvParameters)
-// {
-//     int16_t accel_x, accel_y, accel_z;
-//     int16_t gyro_x, gyro_y, gyro_z;
-    
-//     // Initialize I2C
-//     ESP_ERROR_CHECK(i2c_master_init());
-//     ESP_LOGI(TAG, "I2C initialized successfully");
-    
-//     // Initialize MPU6050
-//     ESP_ERROR_CHECK(mpu6050_init());
-//     ESP_LOGI(TAG, "MPU6050 initialized successfully");
-    
-//     TickType_t last_wake_time = xTaskGetTickCount();
-//     const TickType_t sample_period = pdMS_TO_TICKS(10); // 100Hz sampling
-    
-//     while (1) {
-//         esp_err_t ret = mpu6050_read_data(&accel_x, &accel_y, &accel_z,
-//                                          &gyro_x, &gyro_y, &gyro_z);
-                                         
-//         if (ret == ESP_OK) {
-//             ESP_LOGI(TAG, "Accel: X=%d Y=%d Z=%d | Gyro: X=%d Y=%d Z=%d",
-//                     accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z);
-//         } else {
-//             ESP_LOGE(TAG, "Failed to read sensor data: %s", esp_err_to_name(ret));
-//         }
-        
-//         // Precise timing for the control loop
-//         vTaskDelayUntil(&last_wake_time, sample_period);
-//     }
-// }
 
 void sensor_reading_task(void *pvParameters)
 {
@@ -444,48 +520,97 @@ void sensor_reading_task(void *pvParameters)
     float filtered_gx, filtered_gy, filtered_gz;
     
     TickType_t last_wake_time = xTaskGetTickCount();
-    const TickType_t sample_period = pdMS_TO_TICKS(1); // 100Hz sampling
+    const TickType_t accel_interval = pdMS_TO_TICKS(10); // 100Hz sampling
+    const TickType_t baro_interval = pdMS_TO_TICKS(100); // 10Hz sampling
+    TickType_t next_accel_time = last_wake_time;
+    TickType_t next_baro_time = last_wake_time;
     
-    while (1) {
-        esp_err_t ret = mpu6050_read_data(&accel_x, &accel_y, &accel_z,
-                                         &gyro_x, &gyro_y, &gyro_z);
-                                         
-        if (ret == ESP_OK) {
-            // Apply calibration offsets
-            accel_x += accel_offset_x;
-            accel_y += accel_offset_y;
-            accel_z += accel_offset_z;
-            gyro_x += gyro_offset_x;
-            gyro_y += gyro_offset_y;
-            gyro_z += gyro_offset_z;
-            
-            // Apply filtering
-            filter.filter(accel_x, accel_y, accel_z,
-                        gyro_x, gyro_y, gyro_z,
-                        &filtered_ax, &filtered_ay, &filtered_az,
-                        &filtered_gx, &filtered_gy, &filtered_gz);
+    for (;;) {
 
-            // Read BMP280
-            ret = bmp280_read_data(&temperature, &pressure);
-            if (ret == ESP_OK) {
-                ESP_LOGI(TAG, "Temp: %.2f°C, Pressure: %.1f hPa", temperature, pressure);
-            } else {
-                ESP_LOGE(TAG, "Failed to read BMP280: %s", esp_err_to_name(ret));
-            }
-            
-            // Log both raw (calibrated) and filtered values
-            ESP_LOGI(TAG, "Raw: Accel: X=%d Y=%d Z=%d | Gyro: X=%d Y=%d Z=%d",
-                    accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z);
-                    
-            ESP_LOGI(TAG, "Filtered: Accel: X=%.2f Y=%.2f Z=%.2f | Gyro: X=%.2f Y=%.2f Z=%.2f",
-                    filtered_ax, filtered_ay, filtered_az,
-                    filtered_gx, filtered_gy, filtered_gz);
-        } else {
-            ESP_LOGE(TAG, "Failed to read sensor data: %s", esp_err_to_name(ret));
+        // Calculate next wake time based on the shorter interval
+        TickType_t delay_interval = std::min(
+            next_accel_time - xTaskGetTickCount(),
+            next_baro_time - xTaskGetTickCount()
+        );
+        // Ensure we don't delay for 0 or negative ticks
+        if (delay_interval > 0) {
+            vTaskDelayUntil(&last_wake_time, delay_interval);
         }
-        
-        // Precise timing for the control loop
-        vTaskDelayUntil(&last_wake_time, sample_period);
+
+        TickType_t now = xTaskGetTickCount();
+
+        if (now >= next_accel_time) {
+            if (xSemaphoreTake(sensor_data_mutex, portMAX_DELAY) == pdTRUE) {
+                esp_err_t ret = mpu6050_read_data(&accel_x, &accel_y, &accel_z,
+                                                &gyro_x, &gyro_y, &gyro_z);
+                
+                if (ret == ESP_OK) {
+                    accel_x += accel_offset_x;
+                    accel_y += accel_offset_y;
+                    accel_z += accel_offset_z;
+                    gyro_x += gyro_offset_x;
+                    gyro_y += gyro_offset_y;
+                    gyro_z += gyro_offset_z;
+
+                    sensor_data.accel_x = accel_x;
+                    sensor_data.accel_y = accel_y;
+                    sensor_data.accel_z = accel_z;
+                    sensor_data.gyro_x = gyro_x;
+                    sensor_data.gyro_y = gyro_y;
+                    sensor_data.gyro_z = gyro_z;
+                    sensor_data.altitude = 0.0f;
+                    xSemaphoreGive(sensor_data_mutex);
+
+                    // Log both raw (calibrated) values
+                    ESP_LOGI(TAG, "Raw: Accel: X=%d Y=%d Z=%d | Gyro: X=%d Y=%d Z=%d",
+                            accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z);
+                } else {
+                    ESP_LOGE(TAG, "Failed to read sensor data: %s", esp_err_to_name(ret));
+                }
+            }
+            next_accel_time += accel_interval;
+        }
+
+        if (now >= next_baro_time) {
+            if (xSemaphoreTake(sensor_data_mutex, portMAX_DELAY) == pdTRUE) {
+                esp_err_t ret = bmp280_read_data(&temperature, &pressure);
+
+                if (ret == ESP_OK) {
+                    sensor_data.altitude = 44330 * (1.0 - pow(pressure / 1013.25, 0.1903));
+                    xSemaphoreGive(sensor_data_mutex);
+                    ESP_LOGI(TAG, "Temp: %.2f°C, Pressure: %.1f hPa", temperature, pressure);
+                } else {
+                    ESP_LOGE(TAG, "Failed to read BMP280: %s", esp_err_to_name(ret));
+                }
+            }
+            next_baro_time += baro_interval;
+        }
+    }
+}
+
+
+void control_task(void *pvParameters) {
+    TickType_t last_wake_time = xTaskGetTickCount();
+    const TickType_t control_interval = pdMS_TO_TICKS(20); // 50Hz control loop
+
+    float desired_pitch = 0.0f;
+    float accel_x;
+
+    for (;;) {
+        if (xSemaphoreTake(sensor_data_mutex, portMAX_DELAY) == pdTRUE) {
+            float accel_x = sensor_data.accel_x;
+            float accel_y = sensor_data.accel_y;
+            float accel_z = sensor_data.accel_z;
+            float altitude = sensor_data.altitude;
+            xSemaphoreGive(sensor_data_mutex);
+
+            // Perform PID calculations
+            float pitch = pid_calculate(&pitch_pid, desired_pitch, accel_x);
+
+            set_control_surfaces(pitch);
+        }
+
+        vTaskDelayUntil(&last_wake_time, control_interval);
     }
 }
 
@@ -493,8 +618,20 @@ void sensor_reading_task(void *pvParameters)
 
 extern "C" void app_main(void)
 {
+    sensor_data_mutex = xSemaphoreCreateMutex();
+    if (sensor_data_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create sensor data mutex");
+        return;
+    }
+
+    pid_init(&pitch_pid, 1.0f, 0.1f, 0.1f);
+
+    servo_init();
+    set_control_surfaces(0);
     // Create sensor reading task with high priority
-    // Increase stack size significantly (8KB)
     xTaskCreate(sensor_reading_task, "sensor_reading_task", 8192,
             NULL, configMAX_PRIORITIES - 1, NULL);
+
+    xTaskCreate(control_task, "control_task", 2048, NULL, 2, NULL);
+
 }
