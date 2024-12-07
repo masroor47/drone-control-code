@@ -10,6 +10,7 @@ Then, build (it's time to build) and flash. (instead of port put the actual usb 
 
 ```zsh
 idf.py build
+ls /dev/cu.*
 idf.py -p port flash
 ```
 
