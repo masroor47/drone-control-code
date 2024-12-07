@@ -41,6 +41,9 @@
 #define SERVO_MAX_PULSEWIDTH_US 2500 // Maximum pulse width in microseconds (180°)
 #define SERVO_MAX_DEGREE 180         // Maximum angle in degrees
 
+#define ACCEL_SCALE (9.81f / 16384.0f)    // Convert to m/s²  (±2g mode)
+#define GYRO_SCALE (M_PI / (180.0f * 131.0f))  // Convert to rad/s (±250°/s mode)
+
 static const char *TAG = "Sensors";
 
 typedef struct {
@@ -66,9 +69,9 @@ void pid_init(PIDController *pid, float Kp, float Ki, float Kd) {
     pid->integral = 0.0f;
 }
 
-float pid_calculate(PIDController *pid, float desired, float measured) {
+float pid_calculate(PIDController *pid, float target_angle, float current_angle) {
     // Calculate error
-    float error = desired - measured;
+    float error = target_angle - current_angle;
 
     // Proportional term
     float P_out = pid->Kp * error;
@@ -457,7 +460,7 @@ static esp_err_t mpu6050_read_data(int16_t* accel_x, int16_t* accel_y, int16_t* 
 // Calibrate MPU6050
 static esp_err_t mpu6050_calibrate(int16_t* accel_offset_x, int16_t* accel_offset_y, int16_t* accel_offset_z,
                                   int16_t* gyro_offset_x, int16_t* gyro_offset_y, int16_t* gyro_offset_z) {
-    const int num_samples = 1000;
+    const int num_samples = 2000;
     int32_t accel_x_sum = 0, accel_y_sum = 0, accel_z_sum = 0;
     int32_t gyro_x_sum = 0, gyro_y_sum = 0, gyro_z_sum = 0;
     
@@ -467,12 +470,13 @@ static esp_err_t mpu6050_calibrate(int16_t* accel_offset_x, int16_t* accel_offse
         esp_err_t ret = mpu6050_read_data(&ax, &ay, &az, &gx, &gy, &gz);
         if (ret != ESP_OK) return ret;
         
-        accel_x_sum += ax;
-        accel_y_sum += ay;
-        accel_z_sum += az;// - 16384; // Remove 1g from z-axis
-        gyro_x_sum += gx;
-        gyro_y_sum += gy;
-        gyro_z_sum += gz;
+        // Convert to SI units while summing
+        accel_x_sum += ax * ACCEL_SCALE;
+        accel_y_sum += ay * ACCEL_SCALE;
+        accel_z_sum += (az - 16384) * ACCEL_SCALE;  // Remove 1g, then convert
+        gyro_x_sum += gx * GYRO_SCALE;
+        gyro_y_sum += gy * GYRO_SCALE;
+        gyro_z_sum += gz * GYRO_SCALE;
         
         vTaskDelay(pdMS_TO_TICKS(2));
     }
@@ -545,25 +549,24 @@ void sensor_reading_task(void *pvParameters)
                                                 &gyro_x, &gyro_y, &gyro_z);
                 
                 if (ret == ESP_OK) {
-                    accel_x += accel_offset_x;
-                    accel_y += accel_offset_y;
-                    accel_z += accel_offset_z;
-                    gyro_x += gyro_offset_x;
-                    gyro_y += gyro_offset_y;
-                    gyro_z += gyro_offset_z;
+                    float accel_x_si = accel_x * ACCEL_SCALE + accel_offset_x;
+                    float accel_y_si = accel_y * ACCEL_SCALE + accel_offset_y;
+                    float accel_z_si = accel_z * ACCEL_SCALE + accel_offset_z;
+                    float gyro_x_si = gyro_x * GYRO_SCALE + gyro_offset_x;
+                    float gyro_y_si = gyro_y * GYRO_SCALE + gyro_offset_y;
+                    float gyro_z_si = gyro_z * GYRO_SCALE + gyro_offset_z;
 
-                    sensor_data.accel_x = accel_x;
-                    sensor_data.accel_y = accel_y;
-                    sensor_data.accel_z = accel_z;
-                    sensor_data.gyro_x = gyro_x;
-                    sensor_data.gyro_y = gyro_y;
-                    sensor_data.gyro_z = gyro_z;
-                    sensor_data.altitude = 0.0f;
+                    sensor_data.accel_x = accel_x_si;
+                    sensor_data.accel_y = accel_y_si;
+                    sensor_data.accel_z = accel_z_si;
+                    sensor_data.gyro_x = gyro_x_si;
+                    sensor_data.gyro_y = gyro_y_si;
+                    sensor_data.gyro_z = gyro_z_si;
                     xSemaphoreGive(sensor_data_mutex);
 
                     // Log both raw (calibrated) values
-                    ESP_LOGI(TAG, "Raw: Accel: X=%d Y=%d Z=%d | Gyro: X=%d Y=%d Z=%d",
-                            accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z);
+                    ESP_LOGI(TAG, "Raw: Accel: X=%.2f Y=%.2f Z=%.2f | Gyro: X=%.2f Y=%.2f Z=%.2f",
+                            accel_x_si, accel_y_si, accel_z_si, gyro_x_si, gyro_y_si, gyro_z_si);
                 } else {
                     ESP_LOGE(TAG, "Failed to read sensor data: %s", esp_err_to_name(ret));
                 }
@@ -604,8 +607,12 @@ void control_task(void *pvParameters) {
             float altitude = sensor_data.altitude;
             xSemaphoreGive(sensor_data_mutex);
 
+            // calculate angle from accelerometer data
+            float curr_angle = atan2f(accel_y, sqrtf(accel_x * accel_x + accel_z * accel_z));
+
             // Perform PID calculations
-            float pitch = pid_calculate(&pitch_pid, desired_pitch, accel_x);
+            float pitch = pid_calculate(&pitch_pid, desired_pitch, accel_y);
+            // ESP_LOGI(TAG, "PID pitch: %.2f, Curr Angle: %.2f", pitch, curr_angle);
 
             set_control_surfaces(pitch);
         }
@@ -624,7 +631,7 @@ extern "C" void app_main(void)
         return;
     }
 
-    pid_init(&pitch_pid, 1.0f, 0.1f, 0.1f);
+    pid_init(&pitch_pid, 0.7f, 0.8f, 0.0f);
 
     servo_init();
     set_control_surfaces(0);
