@@ -1,13 +1,18 @@
 #include <stdio.h>
 #include <cmath>
 #include "esp_log.h"
+#include "esp_err.h"
 #include "sdkconfig.h"
 #include "esp_system.h"
-#include "driver/i2c.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/i2c.h"
 #include "driver/ledc.h"
-#include "esp_err.h"
+#include "driver/adc.h"
+#include "driver/mcpwm.h"
+#include "driver/gpio.h"
+#include <algorithm>
+#include <initializer_list>
 
 
 #define I2C_MASTER_SCL_IO           22      // SCL pin
@@ -44,11 +49,84 @@
 #define ACCEL_SCALE (9.81f / 16384.0f)    // Convert to m/s²  (±2g mode)
 #define GYRO_SCALE (M_PI / (180.0f * 131.0f))  // Convert to rad/s (±250°/s mode)
 
+
+class ESCController {
+private:
+    const int MIN_PULSE_WIDTH = 1000;    // Microseconds (throttle = 0)
+    const int MAX_PULSE_WIDTH = 2000;    // Microseconds (throttle = 100%)
+    const uint32_t FREQUENCY = 50;            // 50Hz for standard ESCs
+    mcpwm_unit_t mcpwm_unit;
+    mcpwm_timer_t timer;
+    mcpwm_io_signals_t io_signal;
+    int gpio_num;
+
+public:
+    ESCController(mcpwm_unit_t unit, mcpwm_timer_t tim, mcpwm_io_signals_t io_sig, int gpio) 
+        : mcpwm_unit(unit), timer(tim), io_signal(io_sig), gpio_num(gpio) {}
+
+    esp_err_t init() {
+        // Configure MCPWM
+        mcpwm_config_t pwm_config = {
+            .frequency = FREQUENCY,
+            .cmpr_a = 0,
+            .duty_mode = MCPWM_DUTY_MODE_0,
+            .counter_mode = MCPWM_UP_COUNTER,
+        };
+        
+        // Initialize MCPWM
+        ESP_ERROR_CHECK(mcpwm_gpio_init(mcpwm_unit, io_signal, gpio_num));
+        ESP_ERROR_CHECK(mcpwm_init(mcpwm_unit, timer, &pwm_config));
+        
+        // Arm the ESC (set to minimum throttle)
+        return setThrottle(0);
+    }
+
+    esp_err_t setThrottle(float percentage) {
+        // Constrain input to 0-100%
+        if (percentage < 0) percentage = 0;
+        if (percentage > 100) percentage = 100;
+        
+        // Convert percentage to pulse width
+        float pulse_width = MIN_PULSE_WIDTH + (percentage / 100.0) * 
+                          (MAX_PULSE_WIDTH - MIN_PULSE_WIDTH);
+                          
+        // Calculate duty cycle (for 50Hz, period = 20000us)
+        float duty = (pulse_width / 20000.0) * 100.0;
+        
+        return mcpwm_set_duty(mcpwm_unit, timer, MCPWM_OPR_A, duty);
+    }
+
+    // Smooth ramping function
+    esp_err_t rampToThrottle(float target_percentage, float step = 1.0, int delay_ms = 50) {
+        float current = getCurrentThrottle();
+        
+        while (abs(current - target_percentage) > step) {
+            if (current < target_percentage) {
+                current += step;
+            } else {
+                current -= step;
+            }
+            
+            ESP_ERROR_CHECK(setThrottle(current));
+            vTaskDelay(pdMS_TO_TICKS(delay_ms));
+        }
+        
+        return setThrottle(target_percentage);
+    }
+
+    float getCurrentThrottle() {
+        float duty = mcpwm_get_duty(mcpwm_unit, timer, MCPWM_OPR_A);
+        return ((duty / 100.0) * 20000.0 - MIN_PULSE_WIDTH) / 
+               (MAX_PULSE_WIDTH - MIN_PULSE_WIDTH) * 100.0;
+    }
+};
+
 static const char *TAG = "Sensors";
 
 typedef struct {
     float accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z;
     float altitude;
+    float pot_value;
 } SensorData;
 
 typedef struct {
@@ -497,6 +575,9 @@ void sensor_reading_task(void *pvParameters)
     int16_t accel_x, accel_y, accel_z;
     int16_t gyro_x, gyro_y, gyro_z;
     float temperature, pressure;
+
+    ESP_ERROR_CHECK(adc1_config_width(ADC_WIDTH_BIT_12));
+    adc1_config_channel_atten(ADC1_CHANNEL_0, ADC_ATTEN_DB_11);
     
     // Initialize I2C
     ESP_ERROR_CHECK(i2c_master_init());
@@ -526,22 +607,39 @@ void sensor_reading_task(void *pvParameters)
     TickType_t last_wake_time = xTaskGetTickCount();
     const TickType_t accel_interval = pdMS_TO_TICKS(10); // 100Hz sampling
     const TickType_t baro_interval = pdMS_TO_TICKS(100); // 10Hz sampling
+    const TickType_t pot_interval = pdMS_TO_TICKS(50);    // 20Hz sampling for potentiometer
     TickType_t next_accel_time = last_wake_time;
     TickType_t next_baro_time = last_wake_time;
+    TickType_t next_pot_time = last_wake_time;
     
     for (;;) {
 
         // Calculate next wake time based on the shorter interval
-        TickType_t delay_interval = std::min(
+        TickType_t delay_interval = std::min({
             next_accel_time - xTaskGetTickCount(),
-            next_baro_time - xTaskGetTickCount()
-        );
+            next_baro_time - xTaskGetTickCount(),
+            next_pot_time - xTaskGetTickCount()
+        });
         // Ensure we don't delay for 0 or negative ticks
         if (delay_interval > 0) {
             vTaskDelayUntil(&last_wake_time, delay_interval);
         }
 
         TickType_t now = xTaskGetTickCount();
+
+        // Potentiometer reading
+        if (now >= next_pot_time) {
+            if (xSemaphoreTake(sensor_data_mutex, portMAX_DELAY) == pdTRUE) {
+                int adc_value = adc1_get_raw(ADC1_CHANNEL_0);
+                float pot_percentage = (adc_value / 4095.0f) * 100.0f;
+                
+                sensor_data.pot_value = pot_percentage;
+                xSemaphoreGive(sensor_data_mutex);
+                
+                ESP_LOGI(TAG, "Potentiometer: %.1f%%", pot_percentage);
+            }
+            next_pot_time += pot_interval;
+        }
 
         if (now >= next_accel_time) {
             if (xSemaphoreTake(sensor_data_mutex, portMAX_DELAY) == pdTRUE) {
@@ -605,6 +703,7 @@ void control_task(void *pvParameters) {
             float accel_y = sensor_data.accel_y;
             float accel_z = sensor_data.accel_z;
             float altitude = sensor_data.altitude;
+            float pot_value = sensor_data.pot_value;
             xSemaphoreGive(sensor_data_mutex);
 
             // calculate angle from accelerometer data
@@ -612,7 +711,7 @@ void control_task(void *pvParameters) {
 
             // Perform PID calculations
             float pitch = pid_calculate(&pitch_pid, desired_pitch, accel_y);
-            // ESP_LOGI(TAG, "PID pitch: %.2f, Curr Angle: %.2f", pitch, curr_angle);
+            ESP_LOGI(TAG, "PID pitch: %.2f, Curr Angle: %.2f", pitch, curr_angle);
 
             set_control_surfaces(pitch);
         }
@@ -621,6 +720,22 @@ void control_task(void *pvParameters) {
     }
 }
 
+void motor_control_task(void *pvParameters) {
+    ESCController esc(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM0A, GPIO_NUM_27);
+    esc.init();
+
+    TickType_t last_wake_time = xTaskGetTickCount();
+    const TickType_t servo_interval = pdMS_TO_TICKS(20); // 50Hz
+
+    while(1) {
+        if (xSemaphoreTake(sensor_data_mutex, 0) == pdTRUE) { // Non-blocking take
+            float pot_value = sensor_data.pot_value;
+            xSemaphoreGive(sensor_data_mutex);
+            esc.rampToThrottle(pot_value);
+        }
+        vTaskDelayUntil(&last_wake_time, servo_interval);
+    }
+}
 
 
 extern "C" void app_main(void)
@@ -639,6 +754,8 @@ extern "C" void app_main(void)
     xTaskCreate(sensor_reading_task, "sensor_reading_task", 8192,
             NULL, configMAX_PRIORITIES - 1, NULL);
 
-    xTaskCreate(control_task, "control_task", 2048, NULL, 2, NULL);
+    xTaskCreate(control_task, "ctrl", 2048, NULL, 2, NULL);
+
+    xTaskCreate(motor_control_task, "motor_ctrl", 2048, NULL, 5, NULL);
 
 }
