@@ -11,6 +11,12 @@
 #include "utils/thread_safe_queue.hpp"
 
 bool flight_control_system::init() {
+
+    if (!i2c_master::get_instance().init(config_.i2c_sda, config_.i2c_scl, config_.i2c_freq)) {
+        ESP_LOGE("FlightControl", "Failed to initialize I2C master");
+        return false;
+    }
+
     imu_ = std::make_unique<mpu_6050>(i2c_master::get_instance());
     barometer_ = std::make_unique<bmp_280>(i2c_master::get_instance());
 
@@ -18,6 +24,7 @@ bool flight_control_system::init() {
         ESP_LOGE("FlightControl", "Failed to initialize MPU6050");
         return false;
     }
+    ESP_LOGI("FlightControl", "MPU6050 initialized successfully");
 
     if (!barometer_->init()) {
         ESP_LOGE("FlightControl", "Failed to initialize BMP280");
@@ -25,7 +32,9 @@ bool flight_control_system::init() {
     }
 
     imu_queue_ = std::make_unique<thread_safe_queue<mpu_6050::mpu_reading>>();
+    ESP_LOGI("FlightControl", "IMU queue created, about to initialize pwm");
     barometer_queue_ = std::make_unique<thread_safe_queue<bmp_280::reading>>();
+    ESP_LOGI("FlightControl", "Baro queue created, about to initialize pwm");
 
     // Initialize PWM timers first
     pwm_controller::config servo_timer_config {
@@ -46,6 +55,7 @@ bool flight_control_system::init() {
         !pwm_controller::getInstance().initTimer(esc_timer_config)) {
         return false;
     }
+    ESP_LOGI("FlightControl", "PWM timers initialized successfully");
 
     // Initialize servo
     servo::config servo_config {
@@ -63,6 +73,7 @@ bool flight_control_system::init() {
     if (!servo_->init()) {
         return false;
     }
+    ESP_LOGI("FlightControl", "Servo initialized successfully");
 
     esc_controller::config esc_config {
         .pin = GPIO_NUM_19,
@@ -78,18 +89,21 @@ bool flight_control_system::init() {
         return false;
     }
 
-    if (!i2c_master::get_instance().init(config_.i2c_sda, config_.i2c_scl, config_.i2c_freq)) {
-        ESP_LOGE("FlightControl", "Failed to initialize I2C master");
-        return false;
-    }
+    ESP_LOGI("FlightControl", "ESC initialized successfully");
+    
     return true;
 }
 
 void flight_control_system::sensor_task(void* param) {
+    ESP_LOGI("FlightControl", "Sensor task started");
     auto& system = *static_cast<flight_control_system*>(param);
 
     while (true) {
         auto imu_reading = system.imu_->read();
+        ESP_LOGI("FlightControl", "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
+            imu_reading.accel[0], imu_reading.accel[1], imu_reading.accel[2],
+            imu_reading.gyro[0], imu_reading.gyro[1], imu_reading.gyro[2]
+        );
         if (!system.imu_queue_->push(imu_reading)) {
             ESP_LOGE("FlightControl", "Failed to push IMU reading to queue");
         }
@@ -128,19 +142,19 @@ bool flight_control_system::start() {
         return false;
     }
 
-    ret = xTaskCreate(
-        control_task,
-        "control_task",
-        4096,
-        this,
-        configMAX_PRIORITIES - 2,
-        &control_task_handle_
-    );
+    // ret = xTaskCreate(
+    //     control_task,
+    //     "control_task",
+    //     4096,
+    //     this,
+    //     configMAX_PRIORITIES - 2,
+    //     &control_task_handle_
+    // );
 
-    if (ret != pdPASS) {
-        ESP_LOGE("FlightControl", "Failed to create control task");
-        return false;
-    }
+    // if (ret != pdPASS) {
+    //     ESP_LOGE("FlightControl", "Failed to create control task");
+    //     return false;
+    // }
 
     return true;
 }
