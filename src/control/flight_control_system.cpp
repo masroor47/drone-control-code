@@ -93,6 +93,10 @@ void flight_control_system::sensor_task(void* param) {
         if (!system.imu_queue_->push(imu_reading)) {
             ESP_LOGE("FlightControl", "Failed to push IMU reading to queue");
         }
+        ESP_LOGI("FlightControl", "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
+            imu_reading.accel[0], imu_reading.accel[1], imu_reading.accel[2],
+            imu_reading.gyro[0], imu_reading.gyro[1], imu_reading.gyro[2]
+        );
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }

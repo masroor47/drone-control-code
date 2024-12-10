@@ -35,7 +35,7 @@ bool mpu_6050::init() {
     return true;
 }
 
-mpu_6050::mpu_reading mpu_6050::read() {
+    mpu_6050::mpu_reading mpu_6050::read() {
     mpu_reading reading;
     uint8_t data[14];
     reading.timestamp = xTaskGetTickCount();
