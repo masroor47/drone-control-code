@@ -2,13 +2,14 @@
 #pragma once
 #include <cstdint>
 #include "esp_err.h"
+#include "drivers/i2c_master.hpp"
 
 
 class bmp_280 {
 public:
-    static constexpr uint8_t DEFAULT_ADDRESS = 0x77;
+    static constexpr uint8_t BMP_ADDR = 0x77;
     
-    struct Registers {
+    struct registers {
         static constexpr uint8_t TEMP_XLSB = 0xFC;
         static constexpr uint8_t TEMP_LSB = 0xFB;
         static constexpr uint8_t TEMP_MSB = 0xFA;
@@ -23,11 +24,36 @@ public:
         static constexpr uint8_t ID = 0xD0;
     };
 
-    bmp_280(int sda_pin, int scl_pin);
+    struct reading {
+        float temperature;
+        float pressure;
+        esp_err_t status;
+        TickType_t timestamp;
+    };
+
+    bmp_280(i2c_master& i2c) : i2c_(i2c) {};
     bool init();
-    static esp_err_t read_data(float*, float*);
+    void parse_calibration_data(uint8_t* data);
+    reading read();
 
 private:
-    const int sda_pin_;
-    const int scl_pin_;
+    static constexpr char* TAG = "BMP280";
+    i2c_master& i2c_;
+    struct calib_param {
+        uint16_t dig_T1;
+        int16_t  dig_T2;
+        int16_t  dig_T3;
+        uint16_t dig_P1;
+        int16_t  dig_P2;
+        int16_t  dig_P3;
+        int16_t  dig_P4;
+        int16_t  dig_P5;
+        int16_t  dig_P6;
+        int16_t  dig_P7;
+        int16_t  dig_P8;
+        int16_t  dig_P9;
+        int32_t  t_fine;
+    };
+    calib_param calib_;
+
 };
