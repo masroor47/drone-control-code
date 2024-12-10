@@ -8,6 +8,7 @@
 #include "utils/thread_safe_queue.hpp"
 
 class flight_control_system {
+// std::atomic<bool> shutdown_requested_ = false;
 public:
     struct config {
         gpio_num_t i2c_sda;
@@ -21,6 +22,14 @@ public:
           imu_(nullptr),
           barometer_(nullptr),
           servo_(nullptr) {}
+        
+    ~flight_control_system() {
+        // shutdown_requested_ = true;
+        ESP_LOGI("FlightControl", "Shutting down flight control system");
+        // Wait for tasks to finish
+        vTaskDelay(pdMS_TO_TICKS(100));  // Give tasks time to stop
+        // Then delete tasks if needed
+    }
 
     bool init();
     bool start();
