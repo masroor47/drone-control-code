@@ -31,11 +31,11 @@ bool mpu_6050::init() {
         return false;
     }
 
-    ESP_LOGI(TAG, "MPU6050 initialized successfully");
+    ESP_LOGI(TAG, "MPU6050 initialized successfully, returning");
     return true;
 }
 
-    mpu_6050::mpu_reading mpu_6050::read() {
+mpu_6050::mpu_reading mpu_6050::read() {
     mpu_reading reading;
     uint8_t data[14];
     reading.timestamp = xTaskGetTickCount();
@@ -54,5 +54,9 @@ bool mpu_6050::init() {
     reading.gyro[2] = (int16_t(data[12] << 8 | data[13])) * GYRO_SCALE;
     reading.status = ESP_OK;
 
+    ESP_LOGI(TAG, "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
+        reading.accel[0], reading.accel[1], reading.accel[2],
+        reading.gyro[0], reading.gyro[1], reading.gyro[2]
+    );
     return reading;
 }

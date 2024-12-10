@@ -27,8 +27,10 @@ bool bmp_280::init() {
 
     // Configure sensor
     if (!i2c_.write_register(BMP_ADDR, 0xF4, 0x57)) {
+        ESP_LOGE(TAG, "Failed to configure BMP280");
         return false;
     }
+    ESP_LOGI(TAG, "BMP280 initialized successfully");
 
     return true;
 }
