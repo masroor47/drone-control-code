@@ -51,6 +51,32 @@ bmp_280::reading bmp_280::read() {
     int32_t t_fine = var1 + var2;
     reading.temperature = (t_fine * 5 + 128) >> 8;
 
+    int32_t adc_P = ((uint32_t)data[0] << 12) | ((uint32_t)data[1] << 4) | (data[2] >> 4);
+    var1 = (((int32_t)t_fine) >> 1) - 64000;
+    var2 = (((var1 >> 2) * (var1 >> 2)) >> 11) * ((int32_t)calib_.dig_P6);
+    var2 = var2 + ((var1 * ((int32_t)calib_.dig_P5)) << 1);
+    var2 = (var2 >> 2) + (((int32_t)calib_.dig_P4) << 16);
+    var1 = (((calib_.dig_P3 * (((var1 >> 2) * (var1 >> 2)) >> 13)) >> 3) + 
+            ((((int32_t)calib_.dig_P2) * var1) >> 1)) >> 18;
+    var1 = ((((32768 + var1)) * ((int32_t)calib_.dig_P1)) >> 15);
+    
+    if (var1 == 0) { // Avoid division by zero
+        reading.status = ESP_FAIL;
+        return reading;
+    }  
+    
+    int32_t p = (((uint32_t)(((int32_t)1048576) - adc_P) - (var2 >> 12))) * 3125;
+    if (p < 0x80000000) {
+        p = (p << 1) / ((uint32_t)var1);
+    } else {
+        p = (p / (uint32_t)var1) * 2;
+    }
+
+    var1 = (((int32_t)calib_.dig_P9) * ((int32_t)(((p >> 3) * (p >> 3)) >> 13))) >> 12;
+    var2 = (((int32_t)(p >> 2)) * ((int32_t)calib_.dig_P8)) >> 13;
+    p = (uint32_t)((int32_t)p + ((var1 + var2 + calib_.dig_P7) >> 4));
+    
+    reading.pressure = p / 100.0f;  // Convert to hPa
     reading.status = ESP_OK;
     return reading;
 }
