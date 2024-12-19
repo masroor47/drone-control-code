@@ -94,24 +94,23 @@ bool flight_control_system::init() {
     return true;
 }
 
-void flight_control_system::sensor_task(void* param) {
-    ESP_LOGI("FlightControl", "Sensor task started");
+void flight_control_system::imu_task(void* param) {
     auto& system = *static_cast<flight_control_system*>(param);
 
     while (true) {
         auto imu_reading = system.imu_->read();
-        ESP_LOGI("FlightControl", "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
-            imu_reading.accel[0], imu_reading.accel[1], imu_reading.accel[2],
-            imu_reading.gyro[0], imu_reading.gyro[1], imu_reading.gyro[2]
-        );
-        if (!system.imu_queue_->push(imu_reading)) {
-            ESP_LOGE("FlightControl", "Failed to push IMU reading to queue");
-        }
-        ESP_LOGI("FlightControl", "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
-            imu_reading.accel[0], imu_reading.accel[1], imu_reading.accel[2],
-            imu_reading.gyro[0], imu_reading.gyro[1], imu_reading.gyro[2]
-        );
-        vTaskDelay(pdMS_TO_TICKS(10));
+
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+
+void flight_control_system::barometer_task(void* param) {
+    auto& system = *static_cast<flight_control_system*>(param);
+
+    while (true) {
+        auto baro_reading = system.barometer_->read();
+
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -126,19 +125,33 @@ void flight_control_system::control_task(void* param) {
     }
 }
 
-
 bool flight_control_system::start() {
+
     BaseType_t ret = xTaskCreate(
-        sensor_task,
-        "sensor_task",
-        8192,
+        imu_task,
+        "imu_task",
+        4096,
         this,
-        configMAX_PRIORITIES - 1,
-        &sensor_task_handle_
+        configMAX_PRIORITIES - 2,
+        nullptr
     );
 
     if (ret != pdPASS) {
-        ESP_LOGE("FlightControl", "Failed to create sensor task");
+        ESP_LOGE("FlightControl", "Failed to create IMU task");
+        return false;
+    }
+
+    ret = xTaskCreate(
+        barometer_task,
+        "barometer_task",
+        4096,
+        this,
+        configMAX_PRIORITIES - 2,
+        nullptr
+    );
+
+    if (ret != pdPASS) {
+        ESP_LOGE("FlightControl", "Failed to create barometer task");
         return false;
     }
 

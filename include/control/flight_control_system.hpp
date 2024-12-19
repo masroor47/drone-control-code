@@ -42,8 +42,9 @@ private:
     std::unique_ptr<esc_controller> esc_;
     std::unique_ptr<thread_safe_queue<mpu_6050::mpu_reading>> imu_queue_;
     std::unique_ptr<thread_safe_queue<bmp_280::reading>> barometer_queue_;
-    static void sensor_task(void* param);
     static void control_task(void* param);
+    static void imu_task(void* param);
+    static void barometer_task(void* param);
     TaskHandle_t sensor_task_handle_;
     TaskHandle_t control_task_handle_;
 };
