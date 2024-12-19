@@ -20,7 +20,7 @@ public:
     mpu_reading read();
     
 private:
-    static constexpr char* TAG = "main";
+    static constexpr char* TAG = "MPU6050";
 
     static constexpr float ACCEL_SCALE = 9.81f / 16384.0f;  // Convert to m/s² (±2g mode)
     static constexpr float GYRO_SCALE = M_PI / (180.0f * 131.0f);  // Convert to rad/s
