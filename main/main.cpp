@@ -13,7 +13,10 @@ extern "C" void app_main(void)
         .i2c_sda = GPIO_NUM_21,
         .i2c_scl = GPIO_NUM_22,
         .i2c_freq = 400000,
-        .servo_pin = GPIO_NUM_18
+        .servo1_pin = GPIO_NUM_12,
+        .servo2_pin = GPIO_NUM_13,
+        .servo3_pin = GPIO_NUM_14,
+        .servo4_pin = GPIO_NUM_15,
     };
 
     system = std::make_unique<flight_control_system>(config);
