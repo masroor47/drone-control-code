@@ -13,6 +13,7 @@ public:
         float max_pulse_ms;  // Maximum pulse width in milliseconds
         float min_angle;     // Minimum angle in degrees
         float max_angle;     // Maximum angle in degrees
+        float calib_offset;  // Calibration offset in degrees
     };
 
     explicit servo(const config& cfg) 
@@ -40,10 +41,13 @@ public:
         return true;
     }
 
-        void set_angle(float angle) {
+    void set_angle(float angle) {
         // Constrain angle
+        ESP_LOGI(TAG, "Setting angle to %f", angle);
         if (angle < config_.min_angle) angle = config_.min_angle;
         if (angle > config_.max_angle) angle = config_.max_angle;
+        
+        angle += config_.calib_offset;
 
         // Convert angle to pulse width in milliseconds
         float pulse_width_ms = config_.min_pulse_ms + 
@@ -53,6 +57,7 @@ public:
 
         // Convert to duty cycle (assuming 20ms period for standard servos)
         uint32_t duty = (pulse_width_ms / 20.0f) * ((1 << SERVO_RESOLUTION_BITS) - 1);
+        ESP_LOGI(TAG, "Setting duty to %d", (int)duty);
         
         ledc_set_duty(config_.speed_mode, config_.channel, duty);
         ledc_update_duty(config_.speed_mode, config_.channel);
