@@ -37,16 +37,16 @@ bool flight_control_system::init() {
     barometer_ = std::make_unique<bmp_280>(i2c_master::get_instance());
     mag_ = std::make_unique<gy_271>(i2c_master::get_instance());
 
-    if (!imu_->init()) {
-        ESP_LOGE("FlightControl", "Failed to initialize MPU6050");
-        return false;
-    }
-    ESP_LOGI("FlightControl", "MPU6050 initialized successfully");
+    // if (!imu_->init()) {
+    //     ESP_LOGE("FlightControl", "Failed to initialize MPU6050");
+    //     return false;
+    // }
+    // ESP_LOGI("FlightControl", "MPU6050 initialized successfully");
 
-    if (!barometer_->init()) {
-        ESP_LOGE("FlightControl", "Failed to initialize BMP280");
-        return false;
-    }
+    // if (!barometer_->init()) {
+    //     ESP_LOGE("FlightControl", "Failed to initialize BMP280");
+    //     return false;
+    // }
 
     if (!mag_->init()) {
         ESP_LOGE("FlightControl", "Failed to initialize GY271");
@@ -265,19 +265,20 @@ bool flight_control_system::start() {
         &mag_task_handle_
     );
 
-    // ret = xTaskCreate(
-    //     control_task,
-    //     "control_task",
-    //     4096,
-    //     this,
-    //     configMAX_PRIORITIES - 2,
-    //     &control_task_handle_
-    // );
 
-    // if (ret != pdPASS) {
-    //     ESP_LOGE("FlightControl", "Failed to create control task");
-    //     return false;
-    // }
+    BaseType_t ret = xTaskCreate(
+        control_task,
+        "control_task",
+        4096,
+        this,
+        configMAX_PRIORITIES - 2,
+        &control_task_handle_
+    );
+
+    if (ret != pdPASS) {
+        ESP_LOGE("FlightControl", "Failed to create control task");
+        return false;
+    }
 
     return true;
 }
