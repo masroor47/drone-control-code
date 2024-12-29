@@ -54,9 +54,9 @@ mpu_6050::mpu_reading mpu_6050::read() {
     reading.gyro[2] = (int16_t(data[12] << 8 | data[13])) * GYRO_SCALE;
     reading.status = ESP_OK;
 
-    ESP_LOGI(TAG, "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
-        reading.accel[0], reading.accel[1], reading.accel[2],
-        reading.gyro[0], reading.gyro[1], reading.gyro[2]
-    );
+    // ESP_LOGI(TAG, "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
+    //     reading.accel[0], reading.accel[1], reading.accel[2],
+    //     reading.gyro[0], reading.gyro[1], reading.gyro[2]
+    // );
     return reading;
 }
