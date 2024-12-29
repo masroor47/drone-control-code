@@ -51,7 +51,7 @@ bool i2c_master::read_registers(uint8_t deviceAddr, uint8_t startReg, uint8_t* d
         return false;
     }
 
-    ESP_LOGI(TAG, "Reading %d bytes from register 0x%02X on device 0x%02X", len, startReg, deviceAddr);
+    // ESP_LOGI(TAG, "Reading %d bytes from register 0x%02X on device 0x%02X", len, startReg, deviceAddr);
     
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     if (cmd == nullptr) {
@@ -141,7 +141,7 @@ bool i2c_master::read_registers(uint8_t deviceAddr, uint8_t startReg, uint8_t* d
     if (all_zero) {
         ESP_LOGW(TAG, "Warning: All read values are 0, possible communication issue");
     }
-    ESP_LOGI(TAG, "Read data: %02X %02X %02X %02X %02X %02X", data[0], data[1], data[2], data[3], data[4], data[5]);
+    // ESP_LOGI(TAG, "Read data: %02X %02X %02X %02X %02X %02X", data[0], data[1], data[2], data[3], data[4], data[5]);
     
     return true;
 }
@@ -152,7 +152,7 @@ bool i2c_master::write_register(uint8_t device_addr, uint8_t reg, uint8_t data) 
         return false;
     }
     // log what we are writing and to where
-    ESP_LOGI(TAG, "Writing 0x%02X to register 0x%02X on device 0x%02X", data, reg, device_addr);
+    // ESP_LOGI(TAG, "Writing 0x%02X to register 0x%02X on device 0x%02X", data, reg, device_addr);
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (device_addr << 1) | I2C_MASTER_WRITE, true);

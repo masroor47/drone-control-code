@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "sensors/mpu_6050.hpp"
 #include "sensors/bmp_280.hpp"
+#include "sensors/gy_271.hpp"
 #include "actuators/servo.hpp"
 #include "actuators/esc_controller.hpp"
 #include "utils/thread_safe_queue.hpp"
@@ -42,6 +43,7 @@ private:
     const config config_;
     std::unique_ptr<mpu_6050> imu_;
     std::unique_ptr<bmp_280> barometer_;
+    std::unique_ptr<gy_271> mag_;
     std::array<std::unique_ptr<servo>, 4> servos_;
     std::unique_ptr<esc_controller> esc_;
     std::unique_ptr<thread_safe_queue<mpu_6050::mpu_reading>> imu_queue_;
@@ -49,6 +51,10 @@ private:
     static void control_task(void* param);
     static void imu_task(void* param);
     static void barometer_task(void* param);
-    TaskHandle_t sensor_task_handle_;
+    static void mag_task(void* param);
     TaskHandle_t control_task_handle_;
+    TaskHandle_t imu_task_handle_;
+    TaskHandle_t barometer_task_handle_;
+    TaskHandle_t mag_task_handle_;
+    void scan_i2c();
 };

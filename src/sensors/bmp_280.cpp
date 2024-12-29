@@ -78,6 +78,8 @@ bmp_280::reading bmp_280::read() {
     
     reading.pressure = p / 100.0f;  // Convert to hPa
     reading.status = ESP_OK;
+
+    // ESP_LOGI(TAG, "BMP280 reading: %.2f C, %.2f hPa", reading.temperature, reading.pressure);
     return reading;
 }
 
