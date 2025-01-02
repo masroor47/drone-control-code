@@ -7,7 +7,7 @@
 
 class bmp_280 {
 public:
-    static constexpr uint8_t BMP_ADDR = 0x77;
+    static constexpr uint8_t BMP_ADDR = 0x76;
     
     struct registers {
         static constexpr uint8_t TEMP_XLSB = 0xFC;
