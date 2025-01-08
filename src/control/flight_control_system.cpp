@@ -28,7 +28,7 @@ void flight_control_system::scan_i2c() {
 bool flight_control_system::init() {
 
     if (!i2c_master::get_instance().init(config_.i2c_sda, config_.i2c_scl, config_.i2c_freq)) {
-        ESP_LOGE("FlightControl", "Failed to initialize I2C master");
+        ESP_LOGE(TAG, "Failed to initialize I2C master");
         return false;
     }
     // scan_i2c(); // Uncomment to scan I2C bus to find connected devices
@@ -38,28 +38,28 @@ bool flight_control_system::init() {
     mag_ = std::make_unique<gy_271>(i2c_master::get_instance());
 
     if (!imu_->init()) {
-        ESP_LOGE("FlightControl", "Failed to initialize MPU6050");
+        ESP_LOGE(TAG, "Failed to initialize MPU6050");
         return false;
     }
-    ESP_LOGI("FlightControl", "MPU6050 initialized successfully");
+    ESP_LOGI(TAG, "MPU6050 initialized successfully");
 
     if (!barometer_->init()) {
-        ESP_LOGE("FlightControl", "Failed to initialize BMP280");
+        ESP_LOGE(TAG, "Failed to initialize BMP280");
         return false;
     }
-    ESP_LOGI("FlightControl", "BMP280 initialized successfully");
+    ESP_LOGI(TAG, "BMP280 initialized successfully");
 
     if (!mag_->init()) {
-        ESP_LOGE("FlightControl", "Failed to initialize GY271");
+        ESP_LOGE(TAG, "Failed to initialize GY271");
         return false;
     }
-    ESP_LOGI("FlightControl", "GY271 initialized successfully");
+    ESP_LOGI(TAG, "GY271 initialized successfully");
 
 
     // imu_queue_ = std::make_unique<thread_safe_queue<mpu_6050::mpu_reading>>();
-    // ESP_LOGI("FlightControl", "IMU queue created, about to initialize pwm");
+    // ESP_LOGI(TAG, "IMU queue created, about to initialize pwm");
     // barometer_queue_ = std::make_unique<thread_safe_queue<bmp_280::reading>>();
-    // ESP_LOGI("FlightControl", "Baro queue created, about to initialize pwm");
+    // ESP_LOGI(TAG, "Baro queue created, about to initialize pwm");
 
     // Initialize PWM timers first
     pwm_controller::config servo_timer_config {
@@ -80,7 +80,7 @@ bool flight_control_system::init() {
         !pwm_controller::getInstance().initTimer(esc_timer_config)) {
         return false;
     }
-    ESP_LOGI("FlightControl", "PWM timers initialized successfully");
+    ESP_LOGI(TAG, "PWM timers initialized successfully");
 
     // Initialize servos
     servo::config servo_config {
@@ -119,7 +119,7 @@ bool flight_control_system::init() {
             return false;
         }
     }
-    ESP_LOGI("FlightControl", "Servos initialized successfully");
+    ESP_LOGI(TAG, "Servos initialized successfully");
 
     esc_controller::config esc_config {
         .pin = GPIO_NUM_19,
@@ -135,7 +135,7 @@ bool flight_control_system::init() {
         return false;
     }
 
-    ESP_LOGI("FlightControl", "ESC initialized successfully");
+    ESP_LOGI(TAG, "ESC initialized successfully");
     
     return true;
 }
@@ -250,7 +250,7 @@ bool flight_control_system::start() {
     );
 
     if (ret != pdPASS) {
-        ESP_LOGE("FlightControl", "Failed to create IMU task");
+        ESP_LOGE(TAG, "Failed to create IMU task");
         return false;
     }
 
@@ -264,7 +264,7 @@ bool flight_control_system::start() {
     );
 
     if (ret != pdPASS) {
-        ESP_LOGE("FlightControl", "Failed to create barometer task");
+        ESP_LOGE(TAG, "Failed to create barometer task");
         return false;
     }
 
@@ -277,7 +277,7 @@ bool flight_control_system::start() {
         &mag_task_handle_
     );
     if (ret != pdPASS) {
-        ESP_LOGE("FlightControl", "Failed to create magnetometer task");
+        ESP_LOGE(TAG, "Failed to create magnetometer task");
         return false;
     }
 
@@ -292,7 +292,7 @@ bool flight_control_system::start() {
     // );
 
     // if (ret != pdPASS) {
-    //     ESP_LOGE("FlightControl", "Failed to create control task");
+    //     ESP_LOGE(TAG, "Failed to create control task");
     //     return false;
     // }
 
