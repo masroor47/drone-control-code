@@ -31,7 +31,7 @@ bool flight_control_system::init() {
         ESP_LOGE("FlightControl", "Failed to initialize I2C master");
         return false;
     }
-    scan_i2c(); // Uncomment to scan I2C bus to find connected devices
+    // scan_i2c(); // Uncomment to scan I2C bus to find connected devices
 
     imu_ = std::make_unique<mpu_6050>(i2c_master::get_instance());
     barometer_ = std::make_unique<bmp_280>(i2c_master::get_instance());
