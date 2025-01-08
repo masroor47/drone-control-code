@@ -23,7 +23,7 @@
 #define I2C_MASTER_RX_BUF_DISABLE   0       
 
 #define MPU6050_ADDR               0x68    // MPU6050 address
-#define BMP280_ADDR                0x77    // BMP280 address
+#define BMP280_ADDR                0x76    // BMP280 address
 
 // BMP280 registers
 #define BMP280_REG_TEMP_XLSB    0xFC
@@ -49,6 +49,7 @@
 #define ACCEL_SCALE (9.81f / 16384.0f)    // Convert to m/s²  (±2g mode)
 #define GYRO_SCALE (M_PI / (180.0f * 131.0f))  // Convert to rad/s (±250°/s mode)
 
+static const char *TAG = "Sensors";
 
 class ESCController {
 private:
@@ -92,6 +93,8 @@ public:
                           
         // Calculate duty cycle (for 50Hz, period = 20000us)
         float duty = (pulse_width / 20000.0) * 100.0;
+        ESP_LOGI("ESC", "Setting throttle to %.1f%% (pulse width: %.1fus, duty: %.1f%%)", 
+                 percentage, pulse_width, duty);
         
         return mcpwm_set_duty(mcpwm_unit, timer, MCPWM_OPR_A, duty);
     }
@@ -100,6 +103,7 @@ public:
     esp_err_t rampToThrottle(float target_percentage, float step = 1.0, int delay_ms = 50) {
         float current = getCurrentThrottle();
         
+        // ESP_LOGI("ESC", "Ramping throttle from %.1f%% to %.1f%%", current, target_percentage);
         while (abs(current - target_percentage) > step) {
             if (current < target_percentage) {
                 current += step;
@@ -121,7 +125,7 @@ public:
     }
 };
 
-static const char *TAG = "Sensors";
+
 
 typedef struct {
     float accel_x, accel_y, accel_z, gyro_x, gyro_y, gyro_z;
@@ -584,25 +588,25 @@ void sensor_reading_task(void *pvParameters)
     ESP_LOGI(TAG, "I2C initialized successfully");
     
     // Initialize MPU6050
-    ESP_ERROR_CHECK(mpu6050_init());
-    ESP_LOGI(TAG, "MPU6050 initialized successfully");
+    // ESP_ERROR_CHECK(mpu6050_init());
+    // ESP_LOGI(TAG, "MPU6050 initialized successfully");
 
-    // Initialize BMP280
-    ESP_ERROR_CHECK(bmp280_init());
-    ESP_LOGI(TAG, "BMP280 initialized successfully");
+    // // Initialize BMP280
+    // ESP_ERROR_CHECK(bmp280_init());
+    // ESP_LOGI(TAG, "BMP280 initialized successfully");
     
     // Perform calibration
-    ESP_LOGI(TAG, "Starting calibration. Keep the sensor still...");
-    ESP_ERROR_CHECK(mpu6050_calibrate(&accel_offset_x, &accel_offset_y, &accel_offset_z,
-                                     &gyro_offset_x, &gyro_offset_y, &gyro_offset_z));
-    ESP_LOGI(TAG, "Calibration complete");
-    ESP_LOGI(TAG, "Offsets - Accel: X=%d Y=%d Z=%d | Gyro: X=%d Y=%d Z=%d",
-             accel_offset_x, accel_offset_y, accel_offset_z,
-             gyro_offset_x, gyro_offset_y, gyro_offset_z);
+    // ESP_LOGI(TAG, "Starting calibration. Keep the sensor still...");
+    // ESP_ERROR_CHECK(mpu6050_calibrate(&accel_offset_x, &accel_offset_y, &accel_offset_z,
+    //                                  &gyro_offset_x, &gyro_offset_y, &gyro_offset_z));
+    // ESP_LOGI(TAG, "Calibration complete");
+    // ESP_LOGI(TAG, "Offsets - Accel: X=%d Y=%d Z=%d | Gyro: X=%d Y=%d Z=%d",
+    //          accel_offset_x, accel_offset_y, accel_offset_z,
+    //          gyro_offset_x, gyro_offset_y, gyro_offset_z);
     
     // Variables for filtered values
-    float filtered_ax, filtered_ay, filtered_az;
-    float filtered_gx, filtered_gy, filtered_gz;
+    // float filtered_ax, filtered_ay, filtered_az;
+    // float filtered_gx, filtered_gy, filtered_gz;
     
     TickType_t last_wake_time = xTaskGetTickCount();
     const TickType_t accel_interval = pdMS_TO_TICKS(10); // 100Hz sampling
@@ -630,62 +634,62 @@ void sensor_reading_task(void *pvParameters)
         // Potentiometer reading
         if (now >= next_pot_time) {
             if (xSemaphoreTake(sensor_data_mutex, portMAX_DELAY) == pdTRUE) {
-                int adc_value = adc1_get_raw(ADC1_CHANNEL_0);
+                int adc_value = adc1_get_raw(ADC1_CHANNEL_4);
                 float pot_percentage = (adc_value / 4095.0f) * 100.0f;
                 
                 sensor_data.pot_value = pot_percentage;
                 xSemaphoreGive(sensor_data_mutex);
                 
-                ESP_LOGI(TAG, "Potentiometer: %.1f%%", pot_percentage);
+                // ESP_LOGI(TAG, "Potentiometer: %.1f%%", pot_percentage);
             }
             next_pot_time += pot_interval;
         }
 
-        if (now >= next_accel_time) {
-            if (xSemaphoreTake(sensor_data_mutex, portMAX_DELAY) == pdTRUE) {
-                esp_err_t ret = mpu6050_read_data(&accel_x, &accel_y, &accel_z,
-                                                &gyro_x, &gyro_y, &gyro_z);
+        // if (now >= next_accel_time) {
+        //     if (xSemaphoreTake(sensor_data_mutex, portMAX_DELAY) == pdTRUE) {
+        //         esp_err_t ret = mpu6050_read_data(&accel_x, &accel_y, &accel_z,
+        //                                         &gyro_x, &gyro_y, &gyro_z);
                 
-                if (ret == ESP_OK) {
-                    float accel_x_si = accel_x * ACCEL_SCALE + accel_offset_x;
-                    float accel_y_si = accel_y * ACCEL_SCALE + accel_offset_y;
-                    float accel_z_si = accel_z * ACCEL_SCALE + accel_offset_z;
-                    float gyro_x_si = gyro_x * GYRO_SCALE + gyro_offset_x;
-                    float gyro_y_si = gyro_y * GYRO_SCALE + gyro_offset_y;
-                    float gyro_z_si = gyro_z * GYRO_SCALE + gyro_offset_z;
+        //         if (ret == ESP_OK) {
+        //             float accel_x_si = accel_x * ACCEL_SCALE + accel_offset_x;
+        //             float accel_y_si = accel_y * ACCEL_SCALE + accel_offset_y;
+        //             float accel_z_si = accel_z * ACCEL_SCALE + accel_offset_z;
+        //             float gyro_x_si = gyro_x * GYRO_SCALE + gyro_offset_x;
+        //             float gyro_y_si = gyro_y * GYRO_SCALE + gyro_offset_y;
+        //             float gyro_z_si = gyro_z * GYRO_SCALE + gyro_offset_z;
 
-                    sensor_data.accel_x = accel_x_si;
-                    sensor_data.accel_y = accel_y_si;
-                    sensor_data.accel_z = accel_z_si;
-                    sensor_data.gyro_x = gyro_x_si;
-                    sensor_data.gyro_y = gyro_y_si;
-                    sensor_data.gyro_z = gyro_z_si;
-                    xSemaphoreGive(sensor_data_mutex);
+        //             sensor_data.accel_x = accel_x_si;
+        //             sensor_data.accel_y = accel_y_si;
+        //             sensor_data.accel_z = accel_z_si;
+        //             sensor_data.gyro_x = gyro_x_si;
+        //             sensor_data.gyro_y = gyro_y_si;
+        //             sensor_data.gyro_z = gyro_z_si;
+        //             xSemaphoreGive(sensor_data_mutex);
 
-                    // Log both raw (calibrated) values
-                    ESP_LOGI(TAG, "Raw: Accel: X=%.2f Y=%.2f Z=%.2f | Gyro: X=%.2f Y=%.2f Z=%.2f",
-                            accel_x_si, accel_y_si, accel_z_si, gyro_x_si, gyro_y_si, gyro_z_si);
-                } else {
-                    ESP_LOGE(TAG, "Failed to read sensor data: %s", esp_err_to_name(ret));
-                }
-            }
-            next_accel_time += accel_interval;
-        }
+        //             // Log both raw (calibrated) values
+        //             // ESP_LOGI(TAG, "Raw: Accel: X=%.2f Y=%.2f Z=%.2f | Gyro: X=%.2f Y=%.2f Z=%.2f",
+        //             //         accel_x_si, accel_y_si, accel_z_si, gyro_x_si, gyro_y_si, gyro_z_si);
+        //         } else {
+        //             ESP_LOGE(TAG, "Failed to read sensor data: %s", esp_err_to_name(ret));
+        //         }
+        //     }
+        //     next_accel_time += accel_interval;
+        // }
 
-        if (now >= next_baro_time) {
-            if (xSemaphoreTake(sensor_data_mutex, portMAX_DELAY) == pdTRUE) {
-                esp_err_t ret = bmp280_read_data(&temperature, &pressure);
+        // if (now >= next_baro_time) {
+        //     if (xSemaphoreTake(sensor_data_mutex, portMAX_DELAY) == pdTRUE) {
+        //         esp_err_t ret = bmp280_read_data(&temperature, &pressure);
 
-                if (ret == ESP_OK) {
-                    sensor_data.altitude = 44330 * (1.0 - pow(pressure / 1013.25, 0.1903));
-                    xSemaphoreGive(sensor_data_mutex);
-                    ESP_LOGI(TAG, "Temp: %.2f°C, Pressure: %.1f hPa", temperature, pressure);
-                } else {
-                    ESP_LOGE(TAG, "Failed to read BMP280: %s", esp_err_to_name(ret));
-                }
-            }
-            next_baro_time += baro_interval;
-        }
+        //         if (ret == ESP_OK) {
+        //             sensor_data.altitude = 44330 * (1.0 - pow(pressure / 1013.25, 0.1903));
+        //             xSemaphoreGive(sensor_data_mutex);
+        //             // ESP_LOGI(TAG, "Temp: %.2f°C, Pressure: %.1f hPa", temperature, pressure);
+        //         } else {
+        //             ESP_LOGE(TAG, "Failed to read BMP280: %s", esp_err_to_name(ret));
+        //         }
+        //     }
+        //     next_baro_time += baro_interval;
+        // }
     }
 }
 
@@ -711,7 +715,7 @@ void control_task(void *pvParameters) {
 
             // Perform PID calculations
             float pitch = pid_calculate(&pitch_pid, desired_pitch, accel_y);
-            ESP_LOGI(TAG, "PID pitch: %.2f, Curr Angle: %.2f", pitch, curr_angle);
+            // ESP_LOGI(TAG, "PID pitch: %.2f, Curr Angle: %.2f", pitch, curr_angle);
 
             set_control_surfaces(pitch);
         }
@@ -720,9 +724,31 @@ void control_task(void *pvParameters) {
     }
 }
 
+// void calibrateESC() {
+//     ESP_LOGI(TAG, "Starting ESC calibration...");
+    
+//     // Set max throttle first
+//     ESP_LOGI(TAG, "Setting max throttle...");
+//     setThrottle(100);
+    
+//     // Wait for ESC to be powered
+//     ESP_LOGI(TAG, "Power up ESC now...");
+//     vTaskDelay(pdMS_TO_TICKS(5000));
+    
+//     // Set min throttle
+//     ESP_LOGI(TAG, "Setting min throttle...");
+//     setThrottle(0);
+    
+//     // Wait for confirmation
+//     vTaskDelay(pdMS_TO_TICKS(5000));
+    
+//     ESP_LOGI(TAG, "Calibration complete!");
+// }
+
 void motor_control_task(void *pvParameters) {
     ESCController esc(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM0A, GPIO_NUM_27);
     esc.init();
+
 
     TickType_t last_wake_time = xTaskGetTickCount();
     const TickType_t servo_interval = pdMS_TO_TICKS(20); // 50Hz
@@ -754,8 +780,8 @@ extern "C" void app_main(void)
     xTaskCreate(sensor_reading_task, "sensor_reading_task", 8192,
             NULL, configMAX_PRIORITIES - 1, NULL);
 
-    xTaskCreate(control_task, "ctrl", 2048, NULL, 2, NULL);
+    // xTaskCreate(control_task, "ctrl", 2048, NULL, 2, NULL);
 
-    xTaskCreate(motor_control_task, "motor_ctrl", 2048, NULL, 5, NULL);
+    xTaskCreate(motor_control_task, "motor_ctrl", 4096, NULL, 5, NULL);
 
 }
