@@ -10,26 +10,51 @@
 #include "actuators/esc_controller.hpp"
 #include "utils/thread_safe_queue.hpp"
 
+
+
+
+void flight_control_system::scan_i2c() {
+    auto &i2c_ = i2c_master::get_instance();
+    ESP_LOGI(TAG, "Scanning I2C bus...");
+    for (uint8_t addr = 0x00; addr < 0x7F; addr++) {
+        uint8_t data;
+        if (i2c_.read_registers(addr, 0x00, &data, 1)) {
+            ESP_LOGI(TAG, "Found device at address 0x%02X", addr);
+        }
+    }
+};
+
+
 bool flight_control_system::init() {
 
     if (!i2c_master::get_instance().init(config_.i2c_sda, config_.i2c_scl, config_.i2c_freq)) {
         ESP_LOGE("FlightControl", "Failed to initialize I2C master");
         return false;
     }
+    // scan_i2c(); // Uncomment to scan I2C bus to find connected devices
 
-    // imu_ = std::make_unique<mpu_6050>(i2c_master::get_instance());
-    // barometer_ = std::make_unique<bmp_280>(i2c_master::get_instance());
+    imu_ = std::make_unique<mpu_6050>(i2c_master::get_instance());
+    barometer_ = std::make_unique<bmp_280>(i2c_master::get_instance());
+    mag_ = std::make_unique<gy_271>(i2c_master::get_instance());
 
-    // if (!imu_->init()) {
-    //     ESP_LOGE("FlightControl", "Failed to initialize MPU6050");
-    //     return false;
-    // }
-    // ESP_LOGI("FlightControl", "MPU6050 initialized successfully");
+    if (!imu_->init()) {
+        ESP_LOGE("FlightControl", "Failed to initialize MPU6050");
+        return false;
+    }
+    ESP_LOGI("FlightControl", "MPU6050 initialized successfully");
 
-    // if (!barometer_->init()) {
-    //     ESP_LOGE("FlightControl", "Failed to initialize BMP280");
-    //     return false;
-    // }
+    if (!barometer_->init()) {
+        ESP_LOGE("FlightControl", "Failed to initialize BMP280");
+        return false;
+    }
+    ESP_LOGI("FlightControl", "BMP280 initialized successfully");
+
+    if (!mag_->init()) {
+        ESP_LOGE("FlightControl", "Failed to initialize GY271");
+        return false;
+    }
+    ESP_LOGI("FlightControl", "GY271 initialized successfully");
+
 
     // imu_queue_ = std::make_unique<thread_safe_queue<mpu_6050::mpu_reading>>();
     // ESP_LOGI("FlightControl", "IMU queue created, about to initialize pwm");
@@ -120,6 +145,10 @@ void flight_control_system::imu_task(void* param) {
 
     while (true) {
         auto imu_reading = system.imu_->read();
+        // ESP_LOGI(TAG, "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
+        //     imu_reading.accel[0], imu_reading.accel[1], imu_reading.accel[2],
+        //     imu_reading.gyro[0], imu_reading.gyro[1], imu_reading.gyro[2]
+        // );
 
         vTaskDelay(pdMS_TO_TICKS(5));
     }
@@ -130,6 +159,22 @@ void flight_control_system::barometer_task(void* param) {
 
     while (true) {
         auto baro_reading = system.barometer_->read();
+        // ESP_LOGI(TAG, "Barometer reading: Pressure: %.2f Pa, Temperature: %.2f C",
+        //     baro_reading.pressure, baro_reading.temperature
+        // );
+
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+void flight_control_system::mag_task(void* param) {
+    auto& system = *static_cast<flight_control_system*>(param);
+
+    while (true) {
+        auto mag_reading = system.mag_->read();
+        // ESP_LOGI(TAG, "Magnetometer reading: (%.2f, %.2f, %.2f)",
+        //     mag_reading.mag[0], mag_reading.mag[1], mag_reading.mag[2]
+        // );
 
         vTaskDelay(pdMS_TO_TICKS(50));
     }
@@ -195,47 +240,61 @@ void flight_control_system::control_task(void* param) {
 
 bool flight_control_system::start() {
 
-    // BaseType_t ret = xTaskCreate(
-    //     imu_task,
-    //     "imu_task",
-    //     4096,
-    //     this,
-    //     configMAX_PRIORITIES - 2,
-    //     nullptr
-    // );
-
-    // if (ret != pdPASS) {
-    //     ESP_LOGE("FlightControl", "Failed to create IMU task");
-    //     return false;
-    // }
-
-    // ret = xTaskCreate(
-    //     barometer_task,
-    //     "barometer_task",
-    //     4096,
-    //     this,
-    //     configMAX_PRIORITIES - 2,
-    //     nullptr
-    // );
-
-    // if (ret != pdPASS) {
-    //     ESP_LOGE("FlightControl", "Failed to create barometer task");
-    //     return false;
-    // }
-
     BaseType_t ret = xTaskCreate(
-        control_task,
-        "control_task",
+        imu_task,
+        "imu_task",
         4096,
         this,
         configMAX_PRIORITIES - 2,
-        &control_task_handle_
+        &imu_task_handle_
     );
 
     if (ret != pdPASS) {
-        ESP_LOGE("FlightControl", "Failed to create control task");
+        ESP_LOGE("FlightControl", "Failed to create IMU task");
         return false;
     }
+
+    ret = xTaskCreate(
+        barometer_task,
+        "barometer_task",
+        4096,
+        this,
+        configMAX_PRIORITIES - 2,
+        &barometer_task_handle_
+    );
+
+    if (ret != pdPASS) {
+        ESP_LOGE("FlightControl", "Failed to create barometer task");
+        return false;
+    }
+
+    ret = xTaskCreate(
+        mag_task,
+        "mag_task",
+        4096,
+        this,
+        configMAX_PRIORITIES - 2,
+        &mag_task_handle_
+    );
+    if (ret != pdPASS) {
+        ESP_LOGE("FlightControl", "Failed to create magnetometer task");
+        return false;
+    }
+
+
+    // ret = xTaskCreate(
+    //     control_task,
+    //     "control_task",
+    //     4096,
+    //     this,
+    //     configMAX_PRIORITIES - 2,
+    //     &control_task_handle_
+    // );
+
+    // if (ret != pdPASS) {
+    //     ESP_LOGE("FlightControl", "Failed to create control task");
+    //     return false;
+    // }
 
     return true;
 }

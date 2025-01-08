@@ -43,7 +43,7 @@ public:
 
     void set_angle(float angle) {
         // Constrain angle
-        ESP_LOGI(TAG, "Setting angle to %f", angle);
+        // ESP_LOGI(TAG, "Setting angle to %f", angle);
         if (angle < config_.min_angle) angle = config_.min_angle;
         if (angle > config_.max_angle) angle = config_.max_angle;
         
@@ -57,7 +57,7 @@ public:
 
         // Convert to duty cycle (assuming 20ms period for standard servos)
         uint32_t duty = (pulse_width_ms / 20.0f) * ((1 << SERVO_RESOLUTION_BITS) - 1);
-        ESP_LOGI(TAG, "Setting duty to %d", (int)duty);
+        // ESP_LOGI(TAG, "Setting duty to %d", (int)duty);
         
         ledc_set_duty(config_.speed_mode, config_.channel, duty);
         ledc_update_duty(config_.speed_mode, config_.channel);
