@@ -18,6 +18,7 @@ public:
         TickType_t timestamp;
     };
     mpu_reading read();
+    esp_err_t calibrate(uint16_t samples = 1000);
     
 private:
     static constexpr char* TAG = "MPU6050";
