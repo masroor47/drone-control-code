@@ -1,7 +1,8 @@
 #pragma once
-#include "freertos/semphr.h"
+#include "freertos/FreeRTOS.h"
 
 #include "esp_log.h"
+
 #include <memory>
 
 #include "sensors/mpu_6050.hpp"
@@ -28,7 +29,7 @@ public:
         float roll;    // degrees
         float pitch;   // degrees
         float yaw;     // degrees
-        uint64_t timestamp;  // microseconds
+        TickType_t timestamp;  // microseconds
     };
 
     struct protected_attitude_data {
@@ -90,7 +91,7 @@ private:
         float prev_roll = 0.0f;
         float prev_pitch = 0.0f;
         float prev_yaw = 0.0f;
-        uint64_t last_update = 0;
+        TickType_t last_update = 0;
     } filter_state_;
     
     struct filter_params {
