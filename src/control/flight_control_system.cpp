@@ -211,23 +211,22 @@ void flight_control_system::sensor_fusion_task(void* param) {
 
         dt = (float)(current_ticks - system.filter_state_.last_update) * TICK_TO_SEC;
 
-        float accel_roll = atan2f(imu_reading.accel[1], imu_reading.accel[2]) * RAD_TO_DEG;
-        float accel_pitch = atan2f(-imu_reading.accel[0], 
-            sqrtf(imu_reading.accel[1] * imu_reading.accel[1] + 
-            imu_reading.accel[2] * imu_reading.accel[2])) * RAD_TO_DEG;
+        float accel_pitch = atan2f(imu_reading.accel[2], -imu_reading.accel[1]) * RAD_TO_DEG;  // Now using Z component
+        float accel_yaw = atan2f(imu_reading.accel[0], -imu_reading.accel[1]) * RAD_TO_DEG;    // Now using X component
 
+        // For gyro, roll is around the vertical axis (Y axis showing ~-9.8g)
         float gyro_roll = system.filter_state_.prev_roll + 
-            imu_reading.gyro[0] * system.filter_params_.gyro_scale * dt;
-        float gyro_pitch = system.filter_state_.prev_pitch + 
             imu_reading.gyro[1] * system.filter_params_.gyro_scale * dt;
+        float gyro_pitch = system.filter_state_.prev_pitch + 
+            imu_reading.gyro[2] * system.filter_params_.gyro_scale * dt;  // Swapped with yaw
         float gyro_yaw = system.filter_state_.prev_yaw +
-            imu_reading.gyro[2] * system.filter_params_.gyro_scale * dt;
+            imu_reading.gyro[0] * system.filter_params_.gyro_scale * dt;  // Swapped with pitch
 
         float alpha = system.filter_params_.alpha;
         attitude_estimate new_estimate {
-            .roll = (1.0f - alpha) * gyro_roll + alpha * accel_roll,
+            .roll = gyro_roll,  // Roll can only come from gyro integration
             .pitch = (1.0f - alpha) * gyro_pitch + alpha * accel_pitch,
-            .yaw = gyro_yaw,
+            .yaw = (1.0f - alpha) * gyro_yaw + alpha * accel_yaw,
             .timestamp = current_ticks
         };
 
