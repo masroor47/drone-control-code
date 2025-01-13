@@ -1,6 +1,5 @@
 #include <memory>
 #include "esp_log.h"
-
 #include "control/flight_control_system.hpp"
 #include "drivers/i2c_master.hpp"
 #include "sensors/mpu_6050.hpp"
@@ -9,8 +8,6 @@
 #include "actuators/servo.hpp"
 #include "actuators/esc_controller.hpp"
 #include "utils/thread_safe_queue.hpp"
-
-
 
 
 void flight_control_system::scan_i2c() {
@@ -145,10 +142,10 @@ void flight_control_system::imu_task(void* param) {
 
     while (true) {
         auto imu_reading = system.imu_->read();
-        // ESP_LOGI(TAG, "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
-        //     imu_reading.accel[0], imu_reading.accel[1], imu_reading.accel[2],
-        //     imu_reading.gyro[0], imu_reading.gyro[1], imu_reading.gyro[2]
-        // );
+        ESP_LOGI(TAG, "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
+            imu_reading.accel[0], imu_reading.accel[1], imu_reading.accel[2],
+            imu_reading.gyro[0], imu_reading.gyro[1], imu_reading.gyro[2]
+        );
 
         vTaskDelay(pdMS_TO_TICKS(5));
     }
@@ -183,59 +180,15 @@ void flight_control_system::mag_task(void* param) {
 void flight_control_system::control_task(void* param) {
     auto& system = *static_cast<flight_control_system*>(param);
     
-    // bool completed_one = false;
     // while(true) {
         // if (auto data = system.imu_queue_->pop(pdMS_TO_TICKS(100))) {
         //     // Process data
 
         // }
-        
-    for (auto& servo : system.servos_) {
-        servo->set_angle(0.0f);
-    }
-    vTaskDelay(pdMS_TO_TICKS(1000));
+}
 
-    // for (float angle = -20.0f; angle <= 20.0f; angle += 0.1f) {
-    //     // for (auto& servo : system.servos_) {
-    //         // servo->set_angle(angle);
-    //     // }
-    //     system.servos_[0]->set_angle(angle);
-    //     vTaskDelay(pdMS_TO_TICKS(10));
-    // }
-    // }
-
-    // only 0 and 2 should turn
-    system.servos_[0]->set_angle(20.0f);
-    system.servos_[2]->set_angle(20.0f);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    for (auto& servo : system.servos_) {
-        servo->set_angle(0.0f);
-    }
-    vTaskDelay(pdMS_TO_TICKS(500));
-    system.servos_[0]->set_angle(-20.0f);
-    system.servos_[2]->set_angle(-20.0f);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    for (auto& servo : system.servos_) {
-        servo->set_angle(0.0f);
-    }
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-
-    // only 1 and 3 should turn
-    system.servos_[1]->set_angle(20.0f);
-    system.servos_[3]->set_angle(20.0f);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    for (auto& servo : system.servos_) {
-        servo->set_angle(0.0f);
-    }
-    vTaskDelay(pdMS_TO_TICKS(500));
-    system.servos_[1]->set_angle(-20.0f);
-    system.servos_[3]->set_angle(-20.0f);
-    vTaskDelay(pdMS_TO_TICKS(500));
-    for (auto& servo : system.servos_) {
-        servo->set_angle(0.0f);
-    }
-    vTaskDelay(pdMS_TO_TICKS(500));
+void flight_control_system::test_sequence_task(void* param) {
+    auto& system = *static_cast<flight_control_system*>(param);
 }
 
 bool flight_control_system::start() {
@@ -268,18 +221,18 @@ bool flight_control_system::start() {
         return false;
     }
 
-    ret = xTaskCreate(
-        mag_task,
-        "mag_task",
-        4096,
-        this,
-        configMAX_PRIORITIES - 2,
-        &mag_task_handle_
-    );
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create magnetometer task");
-        return false;
-    }
+    // ret = xTaskCreate(
+    //     mag_task,
+    //     "mag_task",
+    //     4096,
+    //     this,
+    //     configMAX_PRIORITIES - 2,
+    //     &mag_task_handle_
+    // );
+    // if (ret != pdPASS) {
+    //     ESP_LOGE(TAG, "Failed to create magnetometer task");
+    //     return false;
+    // }
 
 
     // ret = xTaskCreate(
@@ -295,6 +248,15 @@ bool flight_control_system::start() {
     //     ESP_LOGE(TAG, "Failed to create control task");
     //     return false;
     // }
+
+    // ret = xTaskCreate(
+    //     test_sequence_task,
+    //     "test_sequence_task",
+    //     4096,
+    //     this,
+    //     configMAX_PRIORITIES - 2,
+    //     &test_sequence_task_handle_
+    // );
 
     return true;
 }

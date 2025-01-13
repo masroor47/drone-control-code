@@ -52,9 +52,11 @@ private:
     static void imu_task(void* param);
     static void barometer_task(void* param);
     static void mag_task(void* param);
+    static void test_sequence_task(void* param);
     TaskHandle_t control_task_handle_;
     TaskHandle_t imu_task_handle_;
     TaskHandle_t barometer_task_handle_;
     TaskHandle_t mag_task_handle_;
+    TaskHandle_t test_sequence_task_handle_;
     void scan_i2c();
 };
