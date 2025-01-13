@@ -1,5 +1,9 @@
-#include <memory>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+
 #include "esp_log.h"
+#include <memory>
 
 #include "control/flight_control_system.hpp"
 #include "drivers/i2c_master.hpp"
@@ -145,10 +149,75 @@ void flight_control_system::imu_task(void* param) {
 
     while (true) {
         auto imu_reading = system.imu_->read();
+        if (xSemaphoreTake(system.imu_data_.mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            system.imu_data_.latest_reading = imu_reading;
+            xSemaphoreGive(system.imu_data_.mutex);
+        }
         // ESP_LOGI(TAG, "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
         //     imu_reading.accel[0], imu_reading.accel[1], imu_reading.accel[2],
         //     imu_reading.gyro[0], imu_reading.gyro[1], imu_reading.gyro[2]
         // );
+
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+}
+
+void flight_control_system::sensor_fusion_task(void* param) {
+    auto& system = *static_cast<flight_control_system*>(param);
+    const float RAD_TO_DEG = 180.0f / M_PI;
+
+    while (true) {
+        mpu_6050::mpu_reading imu_reading;
+        if (xSemaphoreTake(system.imu_data_.mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            imu_reading = system.imu_data_.latest_reading;
+            xSemaphoreGive(system.imu_data_.mutex);
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
+        uint64_t current_time = esp_timer_get_time();
+        float dt = (current_time - system.filter_state_.last_update) / 1e6;
+
+        if (system.filter_state_.last_update == 0) {
+            system.filter_state_.last_update = current_time;
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
+        float accel_roll = atan2f(imu_reading.accel[1], imu_reading.accel[2]) * RAD_TO_DEG;
+        float accel_pitch = atan2f(-imu_reading.accel[0], 
+            sqrtf(imu_reading.accel[1] * imu_reading.accel[1] + 
+            imu_reading.accel[2] * imu_reading.accel[2])) * RAD_TO_DEG;
+
+        float gyro_roll = system.filter_state_.prev_roll + 
+            imu_reading.gyro[0] * system.filter_params_.gyro_scale * dt;
+        float gyro_pitch = system.filter_state_.prev_pitch + 
+            imu_reading.gyro[1] * system.filter_params_.gyro_scale * dt;
+        float gyro_yaw = system.filter_state_.prev_yaw +
+            imu_reading.gyro[2] * system.filter_params_.gyro_scale * dt;
+
+        float alpha = system.filter_params_.alpha;
+        attitude_estimate new_estimate {
+            .roll = (1.0f - alpha) * gyro_roll + alpha * accel_roll,
+            .pitch = (1.0f - alpha) * gyro_pitch + alpha * accel_pitch,
+            .yaw = gyro_yaw
+            .timestamp = current_time
+        }
+
+        ESP_LOGI(TAG, "Roll: %.2f, Pitch: %.2f, Yaw: %.2f",
+            new_estimate.roll, new_estimate.pitch, new_estimate.yaw
+        );
+        
+        system.filter_state_.prev_roll = new_estimate.roll;
+        system.filter_state_.prev_pitch = new_estimate.pitch;
+        system.filter_state_.prev_yaw = new_estimate.yaw;
+        system.filter_state_.last_update = current_time;
+
+        if (xSemaphoreTake(system.attitude_data_.mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            system.attitude_data_.latest_estimate = new_estimate;
+            xSemaphoreGive(system.attitude_data_.mutex);
+        }
 
         vTaskDelay(pdMS_TO_TICKS(5));
     }
@@ -159,6 +228,10 @@ void flight_control_system::barometer_task(void* param) {
 
     while (true) {
         auto baro_reading = system.barometer_->read();
+        if (xSemaphoreTake(system.barometer_data_.mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            system.barometer_data_.latest_reading = baro_reading;
+            xSemaphoreGive(system.barometer_data_.mutex);
+        }
         // ESP_LOGI(TAG, "Barometer reading: Pressure: %.2f Pa, Temperature: %.2f C",
         //     baro_reading.pressure, baro_reading.temperature
         // );
@@ -251,6 +324,19 @@ bool flight_control_system::start() {
 
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create IMU task");
+        return false;
+    }
+
+    ret = xTaskCreate(
+        sensor_fusion_task,
+        "sensor_fusion_task",
+        4096,
+        this,
+        configMAX_PRIORITIES - 2,
+        &sensor_fusion_task_handle_
+    );
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create sensor fusion task");
         return false;
     }
 
