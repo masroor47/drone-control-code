@@ -143,12 +143,6 @@ bool flight_control_system::init() {
 void flight_control_system::imu_task(void* param) {
     auto& system = *static_cast<flight_control_system*>(param);
 
-    if (system.imu_->calibrate() != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to calibrate IMU");
-        return;
-    }
-    ESP_LOGI(TAG, "IMU calibrated successfully");
-
     while (true) {
         auto imu_reading = system.imu_->read();
         // ESP_LOGI(TAG, "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
