@@ -95,7 +95,7 @@ private:
     } filter_state_;
     
     struct filter_params {
-        float alpha = 0.02f;
+        float alpha = 0.05f;
         float gyro_scale = 1.0f;
     } filter_params_;
 
