@@ -46,29 +46,13 @@ mpu_6050::mpu_reading mpu_6050::read() {
     }
 
     // Combine high and low bytes for each sensor
-    reading.accel[0] = (int16_t(data[0] << 8 | data[1]));
-    reading.accel[1] = (int16_t(data[2] << 8 | data[3]));
-    reading.accel[2] = (int16_t(data[4] << 8 | data[5]));
-    reading.gyro[0] = (int16_t(data[8] << 8 | data[9]));
-    reading.gyro[1] = (int16_t(data[10] << 8 | data[11]));
-    reading.gyro[2] = (int16_t(data[12] << 8 | data[13]));
-    reading.status = ESP_OK;
-
-    // Apply calibration offsets
-    reading.accel[0] -= accel_offset_x_;
-    reading.accel[1] -= accel_offset_y_;
-    reading.accel[2] -= accel_offset_z_;
-    reading.gyro[0] -= gyro_offset_x_;
-    reading.gyro[1] -= gyro_offset_y_;
-    reading.gyro[2] -= gyro_offset_z_;
-
-    // Convert to m/s² and rad/s
-    reading.accel[0] *= ACCEL_SCALE;
-    reading.accel[1] *= ACCEL_SCALE;
-    reading.accel[2] *= ACCEL_SCALE;
-    reading.gyro[0] *= GYRO_SCALE;
-    reading.gyro[1] *= GYRO_SCALE;
-    reading.gyro[2] *= GYRO_SCALE;
+    reading.accel[0] = (int16_t(data[0] << 8 | data[1]) - offsets_.ax) * ACCEL_SCALE;
+    reading.accel[1] = (int16_t(data[2] << 8 | data[3]) - offsets_.ay) * ACCEL_SCALE;
+    reading.accel[2] = (int16_t(data[4] << 8 | data[5]) - offsets_.az) * ACCEL_SCALE;
+    
+    reading.gyro[0] = (int16_t(data[8] << 8 | data[9]) - offsets_.gx) * GYRO_SCALE;
+    reading.gyro[1] = (int16_t(data[10] << 8 | data[11]) - offsets_.gy) * GYRO_SCALE;
+    reading.gyro[2] = (int16_t(data[12] << 8 | data[13]) - offsets_.gz) * GYRO_SCALE;
 
     // ESP_LOGI(TAG, "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
     //     reading.accel[0], reading.accel[1], reading.accel[2],
