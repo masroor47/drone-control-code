@@ -1,6 +1,12 @@
-#include <memory>
-#include "esp_log.h"
 #include "control/flight_control_system.hpp"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include "esp_task_wdt.h"
+
+#include <memory>
+
+#include "esp_log.h"
 #include "drivers/i2c_master.hpp"
 #include "sensors/mpu_6050.hpp"
 #include "sensors/bmp_280.hpp"
@@ -51,12 +57,6 @@ bool flight_control_system::init() {
         return false;
     }
     ESP_LOGI(TAG, "GY271 initialized successfully");
-
-
-    // imu_queue_ = std::make_unique<thread_safe_queue<mpu_6050::mpu_reading>>();
-    // ESP_LOGI(TAG, "IMU queue created, about to initialize pwm");
-    // barometer_queue_ = std::make_unique<thread_safe_queue<bmp_280::reading>>();
-    // ESP_LOGI(TAG, "Baro queue created, about to initialize pwm");
 
     // Initialize PWM timers first
     pwm_controller::config servo_timer_config {
@@ -142,6 +142,10 @@ void flight_control_system::imu_task(void* param) {
 
     while (true) {
         auto imu_reading = system.imu_->read();
+        if (xSemaphoreTake(system.imu_data_.mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            system.imu_data_.latest_reading = imu_reading;
+            xSemaphoreGive(system.imu_data_.mutex);
+        }
         ESP_LOGI(TAG, "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
             imu_reading.accel[0], imu_reading.accel[1], imu_reading.accel[2],
             imu_reading.gyro[0], imu_reading.gyro[1], imu_reading.gyro[2]
@@ -151,11 +155,105 @@ void flight_control_system::imu_task(void* param) {
     }
 }
 
+void flight_control_system::sensor_fusion_task(void* param) {
+    ESP_ERROR_CHECK(esp_task_wdt_add(xTaskGetCurrentTaskHandle()));
+
+    auto& system = *static_cast<flight_control_system*>(param);
+    const float RAD_TO_DEG = 180.0f / M_PI;
+    const float TICK_TO_SEC = 1.0f / configTICK_RATE_HZ;
+
+    TickType_t last_wake_time;
+    last_wake_time = xTaskGetTickCount();
+
+    const TickType_t frequency = pdMS_TO_TICKS(10);  // 100Hz
+
+    while (true) {
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
+        TickType_t start_time = xTaskGetTickCount();
+        TickType_t total_start = xTaskGetTickCount();
+
+        if (frequency > 0) {
+            vTaskDelayUntil(&last_wake_time, frequency);
+        } else {
+            ESP_LOGW(TAG, "Frequency is 0, using vTaskDelay instead");
+            vTaskDelay(1);
+        }
+        
+        mpu_6050::mpu_reading imu_reading;
+        TickType_t mutex_start = xTaskGetTickCount();
+        if (xSemaphoreTake(system.imu_data_.mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            TickType_t mutex_time = xTaskGetTickCount() - mutex_start;
+            imu_reading = system.imu_data_.latest_reading;
+            xSemaphoreGive(system.imu_data_.mutex);
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
+        TickType_t calc_start = xTaskGetTickCount();
+
+        TickType_t current_ticks = xTaskGetTickCount();
+        float dt;
+
+        if (system.filter_state_.last_update == 0) {
+            system.filter_state_.last_update = current_ticks;
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
+        dt = (float)(current_ticks - system.filter_state_.last_update) * TICK_TO_SEC;
+
+        float accel_pitch = atan2f(imu_reading.accel[2], -imu_reading.accel[1]) * RAD_TO_DEG;  // Now using Z component
+        float accel_yaw = atan2f(imu_reading.accel[0], -imu_reading.accel[1]) * RAD_TO_DEG;    // Now using X component
+
+        // For gyro, roll is around the vertical axis (Y axis showing ~-9.8g)
+        float gyro_roll = system.filter_state_.prev_roll + 
+            imu_reading.gyro[1] * system.filter_params_.gyro_scale * dt;
+        float gyro_pitch = system.filter_state_.prev_pitch + 
+            imu_reading.gyro[2] * system.filter_params_.gyro_scale * dt;  // Swapped with yaw
+        float gyro_yaw = system.filter_state_.prev_yaw +
+            imu_reading.gyro[0] * system.filter_params_.gyro_scale * dt;  // Swapped with pitch
+
+        float alpha = system.filter_params_.alpha;
+        attitude_estimate new_estimate {
+            .roll = gyro_roll,  // Roll can only come from gyro integration
+            .pitch = (1.0f - alpha) * gyro_pitch + alpha * accel_pitch,
+            .yaw = (1.0f - alpha) * gyro_yaw + alpha * accel_yaw,
+            .timestamp = current_ticks
+        };
+
+        ESP_LOGI(TAG, "Roll: %.2f, Pitch: %.2f, Yaw: %.2f",
+            new_estimate.roll, new_estimate.pitch, new_estimate.yaw
+        );
+        
+        system.filter_state_.prev_roll = new_estimate.roll;
+        system.filter_state_.prev_pitch = new_estimate.pitch;
+        system.filter_state_.prev_yaw = new_estimate.yaw;
+        system.filter_state_.last_update = current_ticks;
+
+        TickType_t calc_time = xTaskGetTickCount() - calc_start;
+
+        TickType_t second_mutex_start = xTaskGetTickCount();
+        if (xSemaphoreTake(system.attitude_data_.mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            TickType_t second_mutex_time = xTaskGetTickCount() - second_mutex_start;
+            system.attitude_data_.latest_estimate = new_estimate;
+            xSemaphoreGive(system.attitude_data_.mutex);
+        }
+        TickType_t second_mutex_end = xTaskGetTickCount();
+        
+        TickType_t total_time = second_mutex_end - total_start;
+    }
+}
+
 void flight_control_system::barometer_task(void* param) {
     auto& system = *static_cast<flight_control_system*>(param);
 
     while (true) {
         auto baro_reading = system.barometer_->read();
+        if (xSemaphoreTake(system.barometer_data_.mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            system.barometer_data_.latest_reading = baro_reading;
+            xSemaphoreGive(system.barometer_data_.mutex);
+        }
         // ESP_LOGI(TAG, "Barometer reading: Pressure: %.2f Pa, Temperature: %.2f C",
         //     baro_reading.pressure, baro_reading.temperature
         // );
@@ -179,27 +277,41 @@ void flight_control_system::mag_task(void* param) {
 
 void flight_control_system::control_task(void* param) {
     auto& system = *static_cast<flight_control_system*>(param);
-    
-    // while(true) {
-        // if (auto data = system.imu_queue_->pop(pdMS_TO_TICKS(100))) {
-        //     // Process data
+    flight_control_system::attitude_estimate attitude;
 
-        // }
+    while (true) {
+        if (xSemaphoreTake(system.attitude_data_.mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            attitude = system.attitude_data_.latest_estimate;
+            xSemaphoreGive(system.attitude_data_.mutex);
+            // ESP_LOGI(TAG, "Attitude: Roll: %.2f, Pitch: %.2f, Yaw: %.2f",
+            //     attitude.roll, attitude.pitch, attitude.yaw
+            // );
+        }
+        system.servos_[0]->set_angle(attitude.roll);
+        system.servos_[1]->set_angle(attitude.pitch);
+        system.servos_[2]->set_angle(-attitude.roll);
+        system.servos_[3]->set_angle(-attitude.pitch);
+
+        vTaskDelay(pdMS_TO_TICKS(20)); // 50Hz
+    }
 }
 
 void flight_control_system::test_sequence_task(void* param) {
     auto& system = *static_cast<flight_control_system*>(param);
+
+    
 }
 
 bool flight_control_system::start() {
 
-    BaseType_t ret = xTaskCreate(
+    BaseType_t ret = xTaskCreatePinnedToCore(
         imu_task,
         "imu_task",
         4096,
         this,
         configMAX_PRIORITIES - 2,
-        &imu_task_handle_
+        &imu_task_handle_,
+        1
     );
 
     if (ret != pdPASS) {
@@ -207,13 +319,28 @@ bool flight_control_system::start() {
         return false;
     }
 
-    ret = xTaskCreate(
+    ret = xTaskCreatePinnedToCore(
+        sensor_fusion_task,
+        "sensor_fusion_task",
+        4096,
+        this,
+        configMAX_PRIORITIES - 3,
+        &sensor_fusion_task_handle_,
+        0
+    );
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create sensor fusion task");
+        return false;
+    }
+
+    ret = xTaskCreatePinnedToCore(
         barometer_task,
         "barometer_task",
         4096,
         this,
-        configMAX_PRIORITIES - 2,
-        &barometer_task_handle_
+        configMAX_PRIORITIES - 5,
+        &barometer_task_handle_,
+        1
     );
 
     if (ret != pdPASS) {
@@ -221,27 +348,29 @@ bool flight_control_system::start() {
         return false;
     }
 
-    // ret = xTaskCreate(
-    //     mag_task,
-    //     "mag_task",
-    //     4096,
-    //     this,
-    //     configMAX_PRIORITIES - 2,
-    //     &mag_task_handle_
-    // );
-    // if (ret != pdPASS) {
-    //     ESP_LOGE(TAG, "Failed to create magnetometer task");
-    //     return false;
-    // }
+    ret = xTaskCreatePinnedToCore(
+        mag_task,
+        "mag_task",
+        4096,
+        this,
+        configMAX_PRIORITIES - 6,
+        &mag_task_handle_,
+        1
+    );
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create magnetometer task");
+        return false;
+    }
 
 
-    // ret = xTaskCreate(
+    // ret = xTaskCreatePinnedToCore(
     //     control_task,
     //     "control_task",
     //     4096,
     //     this,
-    //     configMAX_PRIORITIES - 2,
-    //     &control_task_handle_
+    //     configMAX_PRIORITIES - 4,
+    //     &control_task_handle_,
+    //     0
     // );
 
     // if (ret != pdPASS) {
@@ -249,13 +378,14 @@ bool flight_control_system::start() {
     //     return false;
     // }
 
-    // ret = xTaskCreate(
+    // ret = xTaskCreatePinnedToCore(
     //     test_sequence_task,
     //     "test_sequence_task",
     //     4096,
     //     this,
     //     configMAX_PRIORITIES - 2,
     //     &test_sequence_task_handle_
+    //     0
     // );
 
     return true;
