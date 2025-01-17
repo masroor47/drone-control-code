@@ -10,7 +10,7 @@
 #include "sensors/gy_271.hpp"
 #include "actuators/servo.hpp"
 #include "actuators/esc_controller.hpp"
-// #include "utils/thread_safe_queue.hpp"
+#include "test_sequence.hpp"
 
 class flight_control_system {
 // std::atomic<bool> shutdown_requested_ = false;
@@ -82,6 +82,8 @@ private:
     std::unique_ptr<gy_271> mag_;
     std::array<std::unique_ptr<servo>, 4> servos_;
     std::unique_ptr<esc_controller> esc_;
+
+    std::unique_ptr<test_sequence> test_sequence_;
 
     protected_imu_data imu_data_;
     protected_baro_data barometer_data_;

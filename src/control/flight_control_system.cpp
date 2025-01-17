@@ -40,23 +40,23 @@ bool flight_control_system::init() {
     barometer_ = std::make_unique<bmp_280>(i2c_master::get_instance());
     mag_ = std::make_unique<gy_271>(i2c_master::get_instance());
 
-    if (!imu_->init()) {
-        ESP_LOGE(TAG, "Failed to initialize MPU6050");
-        return false;
-    }
-    ESP_LOGI(TAG, "MPU6050 initialized successfully");
+    // if (!imu_->init()) {
+    //     ESP_LOGE(TAG, "Failed to initialize MPU6050");
+    //     return false;
+    // }
+    // ESP_LOGI(TAG, "MPU6050 initialized successfully");
 
-    if (!barometer_->init()) {
-        ESP_LOGE(TAG, "Failed to initialize BMP280");
-        return false;
-    }
-    ESP_LOGI(TAG, "BMP280 initialized successfully");
+    // if (!barometer_->init()) {
+    //     ESP_LOGE(TAG, "Failed to initialize BMP280");
+    //     return false;
+    // }
+    // ESP_LOGI(TAG, "BMP280 initialized successfully");
 
-    if (!mag_->init()) {
-        ESP_LOGE(TAG, "Failed to initialize GY271");
-        return false;
-    }
-    ESP_LOGI(TAG, "GY271 initialized successfully");
+    // if (!mag_->init()) {
+    //     ESP_LOGE(TAG, "Failed to initialize GY271");
+    //     return false;
+    // }
+    // ESP_LOGI(TAG, "GY271 initialized successfully");
 
     // Initialize PWM timers first
     pwm_controller::config servo_timer_config {
@@ -118,21 +118,37 @@ bool flight_control_system::init() {
     }
     ESP_LOGI(TAG, "Servos initialized successfully");
 
-    esc_controller::config esc_config {
-        .pin = GPIO_NUM_19,
-        .channel = LEDC_CHANNEL_1,
-        .timer_num = LEDC_TIMER_1,
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .min_throttle_ms = 1.0f,  // 1ms
-        .max_throttle_ms = 2.0f   // 2ms
-    };
+    // esc_controller::config esc_config {
+    //     .pin = GPIO_NUM_19,
+    //     .channel = LEDC_CHANNEL_1,
+    //     .timer_num = LEDC_TIMER_1,
+    //     .speed_mode = LEDC_LOW_SPEED_MODE,
+    //     .min_throttle_ms = 1.0f,  // 1ms
+    //     .max_throttle_ms = 2.0f   // 2ms
+    // };
 
-    esc_ = std::make_unique<esc_controller>(esc_config);
-    if (!esc_->init()) {
-        return false;
-    }
+    // esc_ = std::make_unique<esc_controller>(esc_config);
+    // if (!esc_->init()) {
+    //     return false;
+    // }
 
     ESP_LOGI(TAG, "ESC initialized successfully");
+
+        test_sequence::config test_cfg {
+        .gyro_servo1_pin = GPIO_NUM_12,  // Define your specific pins
+        .gyro_servo2_pin = GPIO_NUM_13,
+        .gyro_channel1 = LEDC_CHANNEL_4,  // Use different channels from vane servos
+        .gyro_channel2 = LEDC_CHANNEL_5,
+        .timer_num = LEDC_TIMER_0,        // Use the same timer as other servos
+        .speed_mode = LEDC_LOW_SPEED_MODE
+    };
+    
+    test_sequence_ = std::make_unique<test_sequence>(test_cfg);
+    if (!test_sequence_->init()) {
+        ESP_LOGE(TAG, "Failed to initialize test sequence");
+        return false;
+    }
+    ESP_LOGI(TAG, "Test sequence initialized successfully");
     
     return true;
 }
@@ -299,68 +315,80 @@ void flight_control_system::control_task(void* param) {
 void flight_control_system::test_sequence_task(void* param) {
     auto& system = *static_cast<flight_control_system*>(param);
 
+    while (true) {
+        if (system.test_sequence_) {
+            system.test_sequence_->update();
+            
+            if (system.test_sequence_->is_complete()) {
+                ESP_LOGI(TAG, "Test sequence completed");
+                // Optional: restart sequence or clean up
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
     
 }
 
 bool flight_control_system::start() {
 
-    BaseType_t ret = xTaskCreatePinnedToCore(
-        imu_task,
-        "imu_task",
-        4096,
-        this,
-        configMAX_PRIORITIES - 2,
-        &imu_task_handle_,
-        1
-    );
+    BaseType_t ret;
+    // ret = xTaskCreatePinnedToCore(
+    //     imu_task,
+    //     "imu_task",
+    //     4096,
+    //     this,
+    //     configMAX_PRIORITIES - 2,
+    //     &imu_task_handle_,
+    //     1
+    // );
 
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create IMU task");
-        return false;
-    }
+    // if (ret != pdPASS) {
+    //     ESP_LOGE(TAG, "Failed to create IMU task");
+    //     return false;
+    // }
 
-    ret = xTaskCreatePinnedToCore(
-        sensor_fusion_task,
-        "sensor_fusion_task",
-        4096,
-        this,
-        configMAX_PRIORITIES - 3,
-        &sensor_fusion_task_handle_,
-        0
-    );
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create sensor fusion task");
-        return false;
-    }
+    // ret = xTaskCreatePinnedToCore(
+    //     sensor_fusion_task,
+    //     "sensor_fusion_task",
+    //     4096,
+    //     this,
+    //     configMAX_PRIORITIES - 3,
+    //     &sensor_fusion_task_handle_,
+    //     0
+    // );
+    // if (ret != pdPASS) {
+    //     ESP_LOGE(TAG, "Failed to create sensor fusion task");
+    //     return false;
+    // }
 
-    ret = xTaskCreatePinnedToCore(
-        barometer_task,
-        "barometer_task",
-        4096,
-        this,
-        configMAX_PRIORITIES - 5,
-        &barometer_task_handle_,
-        1
-    );
+    // ret = xTaskCreatePinnedToCore(
+    //     barometer_task,
+    //     "barometer_task",
+    //     4096,
+    //     this,
+    //     configMAX_PRIORITIES - 5,
+    //     &barometer_task_handle_,
+    //     1
+    // );
 
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create barometer task");
-        return false;
-    }
+    // if (ret != pdPASS) {
+    //     ESP_LOGE(TAG, "Failed to create barometer task");
+    //     return false;
+    // }
 
-    ret = xTaskCreatePinnedToCore(
-        mag_task,
-        "mag_task",
-        4096,
-        this,
-        configMAX_PRIORITIES - 6,
-        &mag_task_handle_,
-        1
-    );
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create magnetometer task");
-        return false;
-    }
+    // ret = xTaskCreatePinnedToCore(
+    //     mag_task,
+    //     "mag_task",
+    //     4096,
+    //     this,
+    //     configMAX_PRIORITIES - 6,
+    //     &mag_task_handle_,
+    //     1
+    // );
+    // if (ret != pdPASS) {
+    //     ESP_LOGE(TAG, "Failed to create magnetometer task");
+    //     return false;
+    // }
 
 
     // ret = xTaskCreatePinnedToCore(
@@ -372,21 +400,24 @@ bool flight_control_system::start() {
     //     &control_task_handle_,
     //     0
     // );
-
     // if (ret != pdPASS) {
     //     ESP_LOGE(TAG, "Failed to create control task");
     //     return false;
     // }
 
-    // ret = xTaskCreatePinnedToCore(
-    //     test_sequence_task,
-    //     "test_sequence_task",
-    //     4096,
-    //     this,
-    //     configMAX_PRIORITIES - 2,
-    //     &test_sequence_task_handle_
-    //     0
-    // );
+    ret = xTaskCreatePinnedToCore(
+        test_sequence_task,
+        "test_sequence_task",
+        4096,
+        this,
+        configMAX_PRIORITIES - 2,
+        &test_sequence_task_handle_,
+        0
+    );
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create test sequence task");
+        return false;
+    }
 
     return true;
 }
