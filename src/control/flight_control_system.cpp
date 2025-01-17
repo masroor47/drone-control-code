@@ -168,11 +168,6 @@ void flight_control_system::sensor_fusion_task(void* param) {
     TickType_t last_wake_time;
     last_wake_time = xTaskGetTickCount();
 
-    // const TickType_t one_ms = pdMS_TO_TICKS(1);
-    // const TickType_t five_ms = pdMS_TO_TICKS(5);
-    // ESP_LOGI(TAG, "1ms = %d ticks, 5ms = %d ticks", (int)one_ms, (int)five_ms);
-    // ESP_LOGI(TAG, "Tick rate: %d Hz", configTICK_RATE_HZ);
-
     const TickType_t frequency = pdMS_TO_TICKS(10);  // 100Hz
 
     while (true) {
@@ -250,10 +245,6 @@ void flight_control_system::sensor_fusion_task(void* param) {
         TickType_t second_mutex_end = xTaskGetTickCount();
         
         TickType_t total_time = second_mutex_end - total_start;
-
-        // ESP_LOGI(TAG, "Total time: %d, Mutex time: %d, Calc time: %d, Second mutex time: %d",
-        //     (int)total_time, (int)(calc_start - mutex_start), (int)calc_time, (int)(second_mutex_start - second_mutex_end)
-        // );
     }
 }
 
