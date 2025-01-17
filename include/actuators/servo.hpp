@@ -1,6 +1,7 @@
 #pragma once
 #include "driver/gpio.h"
 #include "driver/ledc.h"
+#include "esp_log.h"
 
 class servo {
 public:
@@ -54,6 +55,8 @@ public:
             (angle - config_.min_angle) * 
             (config_.max_pulse_ms - config_.min_pulse_ms) / 
             (config_.max_angle - config_.min_angle);
+        
+        // ESP_LOGI(TAG, "Setting angle to %f; pulse width to %f", angle, pulse_width_ms);
 
         // Convert to duty cycle (assuming 20ms period for standard servos)
         uint32_t duty = (pulse_width_ms / 20.0f) * ((1 << SERVO_RESOLUTION_BITS) - 1);
