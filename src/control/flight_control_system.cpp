@@ -142,7 +142,9 @@ bool flight_control_system::init() {
 
 void flight_control_system::imu_task(void* param) {
     auto& system = *static_cast<flight_control_system*>(param);
-
+    TickType_t last_wake_time = xTaskGetTickCount();
+    const TickType_t task_period = pdMS_TO_TICKS(5);  // 200Hz
+    
     while (true) {
         auto imu_reading = system.imu_->read();
         if (xSemaphoreTake(system.imu_data_.mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
@@ -154,7 +156,93 @@ void flight_control_system::imu_task(void* param) {
             imu_reading.gyro[0], imu_reading.gyro[1], imu_reading.gyro[2]
         );
 
-        vTaskDelay(pdMS_TO_TICKS(5));
+        vTaskDelayUntil(&last_wake_time, task_period);
+    }
+}
+
+void flight_control_system::sensor_fusion_task(void* param) {
+    ESP_ERROR_CHECK(esp_task_wdt_add(xTaskGetCurrentTaskHandle()));
+
+    auto& system = *static_cast<flight_control_system*>(param);
+    const float RAD_TO_DEG = 180.0f / M_PI;
+    const float TICK_TO_SEC = 1.0f / configTICK_RATE_HZ;
+
+    TickType_t last_wake_time;
+    last_wake_time = xTaskGetTickCount();
+
+    const TickType_t frequency = pdMS_TO_TICKS(10);  // 100Hz
+
+    static int log_counter = 0;
+    while (true) {
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
+        TickType_t total_start = xTaskGetTickCount();
+        
+        mpu_6050::mpu_reading imu_reading;
+        TickType_t mutex_start = xTaskGetTickCount();
+        if (xSemaphoreTake(system.imu_data_.mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            TickType_t mutex_time = xTaskGetTickCount() - mutex_start;
+            imu_reading = system.imu_data_.latest_reading;
+            xSemaphoreGive(system.imu_data_.mutex);
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
+        TickType_t calc_start = xTaskGetTickCount();
+
+        TickType_t current_ticks = xTaskGetTickCount();
+        float dt;
+
+        if (system.filter_state_.last_update == 0) {
+            system.filter_state_.last_update = current_ticks;
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
+        dt = (float)(current_ticks - system.filter_state_.last_update) * TICK_TO_SEC;
+
+        float accel_pitch = atan2f(imu_reading.accel[2], -imu_reading.accel[1]) * RAD_TO_DEG;  // Now using Z component
+        float accel_yaw = atan2f(imu_reading.accel[0], -imu_reading.accel[1]) * RAD_TO_DEG;    // Now using X component
+
+        // For gyro, roll is around the vertical axis (Y axis showing ~-9.8g)
+        float gyro_roll = system.filter_state_.prev_roll + 
+            imu_reading.gyro[1] * system.filter_params_.gyro_scale * dt;
+        float gyro_pitch = system.filter_state_.prev_pitch + 
+            imu_reading.gyro[2] * system.filter_params_.gyro_scale * dt;  // Swapped with yaw
+        float gyro_yaw = system.filter_state_.prev_yaw +
+            imu_reading.gyro[0] * system.filter_params_.gyro_scale * dt;  // Swapped with pitch
+
+        float alpha = system.filter_params_.alpha;
+        attitude_estimate new_estimate {
+            .roll = gyro_roll,  // Roll can only come from gyro integration
+            .pitch = (1.0f - alpha) * gyro_pitch + alpha * accel_pitch,
+            .yaw = (1.0f - alpha) * gyro_yaw + alpha * accel_yaw,
+            .timestamp = current_ticks
+        };
+        if (++log_counter % 10 == 0) {  // Only log every 10th reading
+            ESP_LOGI(TAG, "Roll: %.2f, Pitch: %.2f, Yaw: %.2f",
+                new_estimate.roll, new_estimate.pitch, new_estimate.yaw
+            );
+        }
+
+        
+        system.filter_state_.prev_roll = new_estimate.roll;
+        system.filter_state_.prev_pitch = new_estimate.pitch;
+        system.filter_state_.prev_yaw = new_estimate.yaw;
+        system.filter_state_.last_update = current_ticks;
+
+        TickType_t calc_time = xTaskGetTickCount() - calc_start;
+
+        TickType_t second_mutex_start = xTaskGetTickCount();
+        if (xSemaphoreTake(system.attitude_data_.mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            TickType_t second_mutex_time = xTaskGetTickCount() - second_mutex_start;
+            system.attitude_data_.latest_estimate = new_estimate;
+            xSemaphoreGive(system.attitude_data_.mutex);
+        }
+        TickType_t second_mutex_end = xTaskGetTickCount();
+        TickType_t total_time = second_mutex_end - total_start;
+
+        vTaskDelayUntil(&last_wake_time, frequency);
     }
 }
 
