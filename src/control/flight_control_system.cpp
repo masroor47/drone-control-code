@@ -142,19 +142,17 @@ bool flight_control_system::init() {
 
 void flight_control_system::imu_task(void* param) {
     auto& system = *static_cast<flight_control_system*>(param);
-
+    TickType_t last_wake_time = xTaskGetTickCount();
+    const TickType_t task_period = pdMS_TO_TICKS(5);  // 200Hz
+    
     while (true) {
         auto imu_reading = system.imu_->read();
         if (xSemaphoreTake(system.imu_data_.mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
             system.imu_data_.latest_reading = imu_reading;
             xSemaphoreGive(system.imu_data_.mutex);
         }
-        ESP_LOGI(TAG, "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
-            imu_reading.accel[0], imu_reading.accel[1], imu_reading.accel[2],
-            imu_reading.gyro[0], imu_reading.gyro[1], imu_reading.gyro[2]
-        );
 
-        vTaskDelay(pdMS_TO_TICKS(5));
+        vTaskDelayUntil(&last_wake_time, task_period);
     }
 }
 
@@ -170,17 +168,10 @@ void flight_control_system::sensor_fusion_task(void* param) {
 
     const TickType_t frequency = pdMS_TO_TICKS(10);  // 100Hz
 
+    static int log_counter = 0;
     while (true) {
         ESP_ERROR_CHECK(esp_task_wdt_reset());
-        TickType_t start_time = xTaskGetTickCount();
         TickType_t total_start = xTaskGetTickCount();
-
-        if (frequency > 0) {
-            vTaskDelayUntil(&last_wake_time, frequency);
-        } else {
-            ESP_LOGW(TAG, "Frequency is 0, using vTaskDelay instead");
-            vTaskDelay(1);
-        }
         
         mpu_6050::mpu_reading imu_reading;
         TickType_t mutex_start = xTaskGetTickCount();
@@ -224,10 +215,12 @@ void flight_control_system::sensor_fusion_task(void* param) {
             .yaw = (1.0f - alpha) * gyro_yaw + alpha * accel_yaw,
             .timestamp = current_ticks
         };
+        if (++log_counter % 10 == 0) {  // Only log every 10th reading
+            ESP_LOGI(TAG, "Roll: %.2f, Pitch: %.2f, Yaw: %.2f",
+                new_estimate.roll, new_estimate.pitch, new_estimate.yaw
+            );
+        }
 
-        ESP_LOGI(TAG, "Roll: %.2f, Pitch: %.2f, Yaw: %.2f",
-            new_estimate.roll, new_estimate.pitch, new_estimate.yaw
-        );
         
         system.filter_state_.prev_roll = new_estimate.roll;
         system.filter_state_.prev_pitch = new_estimate.pitch;
@@ -243,8 +236,9 @@ void flight_control_system::sensor_fusion_task(void* param) {
             xSemaphoreGive(system.attitude_data_.mutex);
         }
         TickType_t second_mutex_end = xTaskGetTickCount();
-        
         TickType_t total_time = second_mutex_end - total_start;
+
+        vTaskDelayUntil(&last_wake_time, frequency);
     }
 }
 
