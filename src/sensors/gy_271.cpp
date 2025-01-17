@@ -84,9 +84,9 @@ gy_271::mag_reading gy_271::read() {
     
     reading.status = ESP_OK;
 
-    ESP_LOGI(TAG, "Mag reading: (%.2f, %.2f, %.2f) uT, Heading: %.2f rad",
-        reading.mag[0], reading.mag[1], reading.mag[2], reading.heading
-    );
+    // ESP_LOGI(TAG, "Mag reading: (%.2f, %.2f, %.2f) uT, Heading: %.2f rad",
+    //     reading.mag[0], reading.mag[1], reading.mag[2], reading.heading
+    // );
     return reading;
 }
 
