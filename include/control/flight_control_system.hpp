@@ -88,9 +88,10 @@ private:
     protected_attitude_data attitude_data_;
 
     struct filter_state {
-        float prev_roll = 0.0f;
-        float prev_pitch = 0.0f;
-        float prev_yaw = 0.0f;
+        // pitch roll yaw
+        float pitch = 0.0f;
+        float roll = 0.0f;
+        float yaw = 0.0f;
         TickType_t last_update = 0;
     } filter_state_;
     
