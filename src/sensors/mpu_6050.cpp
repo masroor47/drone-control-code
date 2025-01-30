@@ -111,7 +111,7 @@ esp_err_t mpu_6050::calibrate(uint16_t samples) {
     gyro_offset_z_ = gyro_z_sum / samples;
 
     // For accelerometer, adjust Z axis to remove gravity (assuming sensor is flat)
-    accel_offset_z_ -= int16_t(9.81f / ACCEL_SCALE); // Remove 1g from Z axis
+    accel_offset_y_ += int16_t(9.81f / ACCEL_SCALE); // Remove 1g from Z axis
 
     ESP_LOGI(TAG, "Calibration complete. New offsets: Accel: (%.2i, %.2i, %.2i), Gyro: (%.2i, %.2i, %.2i)",
         accel_offset_x_, accel_offset_y_, accel_offset_z_,
