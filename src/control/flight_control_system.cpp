@@ -88,11 +88,12 @@ bool flight_control_system::init() {
         .channel = LEDC_CHANNEL_0,
         .timer_num = LEDC_TIMER_0,
         .speed_mode = LEDC_LOW_SPEED_MODE,
-        .min_pulse_ms = 1.0f,    // 1ms
-        .max_pulse_ms = 2.0f,    // 2ms
-        .min_angle = -20.0f,
-        .max_angle = 20.0f,
-        .calib_offset = 0.0f
+        .min_pulse_ms = 0.5f,    // 1ms
+        .max_pulse_ms = 2.5f,    // 2ms
+        .min_angle = -90.0f,
+        .max_angle = 90.0f,
+        .calib_offset = 0.0f,
+        .angle_limit = 45.0f
     };
 
     const std::array<gpio_num_t, 4> servo_pins = {
@@ -105,7 +106,7 @@ bool flight_control_system::init() {
     };
 
     const std::array<float, 4> calib_offset = {
-        -2.0f, 2.0f, -2.0f, -5.0f
+        15.0f, 2.0f, -2.0f, -5.0f
     };
 
     for (size_t i = 0; i < servos_.size(); ++i) {
@@ -218,9 +219,9 @@ void flight_control_system::sensor_fusion_task(void* param) {
             float accel_yaw = atan2(ax, -ay) * RAD_TO_DEG;
             
             // Integrate gyro rates
-            float gyro_pitch = system.filter_state_.pitch + 
+            float gyro_pitch = system.filter_state_.pitch - 
                 imu_reading.gyro[0] * system.filter_params_.gyro_scale * dt * RAD_TO_DEG;
-            float gyro_yaw = system.filter_state_.yaw + 
+            float gyro_yaw = system.filter_state_.yaw - 
                 imu_reading.gyro[2] * system.filter_params_.gyro_scale * dt * RAD_TO_DEG;
             
 
@@ -299,10 +300,10 @@ void flight_control_system::control_task(void* param) {
             //     attitude.roll, attitude.pitch, attitude.yaw
             // );
         }
-        system.servos_[0]->set_angle(attitude.roll);
-        system.servos_[1]->set_angle(attitude.pitch);
-        system.servos_[2]->set_angle(-attitude.roll);
-        system.servos_[3]->set_angle(-attitude.pitch);
+        system.servos_[0]->set_angle(attitude.pitch + attitude.yaw);
+        system.servos_[1]->set_angle(-attitude.pitch + attitude.yaw);
+        system.servos_[2]->set_angle(-attitude.pitch - attitude.yaw);
+        system.servos_[3]->set_angle(attitude.pitch - attitude.yaw);
 
         vTaskDelay(pdMS_TO_TICKS(20)); // 50Hz
     }
@@ -310,7 +311,9 @@ void flight_control_system::control_task(void* param) {
 
 bool flight_control_system::start() {
 
-    BaseType_t ret = xTaskCreatePinnedToCore(
+    BaseType_t ret;
+
+    ret = xTaskCreatePinnedToCore(
         imu_task,
         "imu_task",
         4096,
@@ -369,20 +372,20 @@ bool flight_control_system::start() {
     }
 
 
-    // ret = xTaskCreatePinnedToCore(
-    //     control_task,
-    //     "control_task",
-    //     4096,
-    //     this,
-    //     configMAX_PRIORITIES - 4,
-    //     &control_task_handle_,
-    //     0
-    // );
+    ret = xTaskCreatePinnedToCore(
+        control_task,
+        "control_task",
+        4096,
+        this,
+        configMAX_PRIORITIES - 4,
+        &control_task_handle_,
+        0
+    );
 
-    // if (ret != pdPASS) {
-    //     ESP_LOGE(TAG, "Failed to create control task");
-    //     return false;
-    // }
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create control task");
+        return false;
+    }
 
     return true;
 }
