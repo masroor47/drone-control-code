@@ -14,8 +14,8 @@ public:
         int16_t gx, gy, gz;
     };
     static constexpr offsets DEFAULT_OFFSETS = {
-        405, -192, -838,   // accel
-        -976, 137, 105     // gyro
+        563, -362, -1195,   // accel
+        -984, 140, 114     // gyro
     };
     explicit mpu_6050(i2c_master& i2c) : 
         offsets_(DEFAULT_OFFSETS), 
