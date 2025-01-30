@@ -175,9 +175,7 @@ void flight_control_system::sensor_fusion_task(void* param) {
     TickType_t last_wake_time;
     last_wake_time = xTaskGetTickCount();
 
-    const TickType_t frequency = pdMS_TO_TICKS(10);  // 100Hz
-
-    TickType_t mutex_time;
+    const TickType_t task_period = pdMS_TO_TICKS(10);  // 100Hz
 
     static int log_counter = 0;
     while (true) {
@@ -255,9 +253,7 @@ void flight_control_system::sensor_fusion_task(void* param) {
             xSemaphoreGive(system.attitude_data_.mutex);
         }
 
-        // log euler angles
-
-        vTaskDelayUntil(&last_wake_time, frequency);
+        vTaskDelayUntil(&last_wake_time, task_period);
     }
 }
 
