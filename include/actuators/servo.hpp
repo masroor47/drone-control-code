@@ -14,6 +14,7 @@ public:
         float min_angle;     // Minimum angle in degrees
         float max_angle;     // Maximum angle in degrees
         float calib_offset;  // Calibration offset in degrees
+        float angle_limit;   // Artificial angle limit to prevent vanes from touching
     };
 
     explicit servo(const config& cfg) 
@@ -46,6 +47,7 @@ public:
         // ESP_LOGI(TAG, "Setting angle to %f", angle);
         if (angle < config_.min_angle) angle = config_.min_angle;
         if (angle > config_.max_angle) angle = config_.max_angle;
+        if (abs(angle) > config_.angle_limit) angle = config_.angle_limit * (angle < 0 ? -1 : 1);
         
         angle += config_.calib_offset;
 
