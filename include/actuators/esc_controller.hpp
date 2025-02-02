@@ -44,7 +44,7 @@ public:
         return true;
     }
 
-    void setThrottle(float throttle_percent) {
+    void set_throttle(float throttle_percent) {
         if (!initialized_) return;
 
         // Constrain throttle to 0-100%
@@ -58,9 +58,41 @@ public:
 
         // Convert to duty cycle (assuming 20ms period)
         uint32_t duty = (pulse_width_ms / 20.0f) * ((1 << ESC_RESOLUTION_BITS) - 1);
+
+        // ESP_LOGI(TAG, "Setting throttle to %.2f%%, pulse width: %.2fms, duty cycle: %d",
+        //     throttle_percent, pulse_width_ms, (int)duty
+        // );
         
         ledc_set_duty(config_.speed_mode, config_.channel, duty);
         ledc_update_duty(config_.speed_mode, config_.channel);
+    }
+    
+    void ramp_to_throttle(float target_throttle_percent) {
+        if (!initialized_) return;
+
+        // Constrain throttle to 0-100%
+        if (target_throttle_percent < 0.0f) target_throttle_percent = 0.0f;
+        if (target_throttle_percent > 100.0f) target_throttle_percent = 100.0f;
+
+        // Convert throttle to pulse width
+        float target_pulse_width_ms = config_.min_throttle_ms + 
+            (target_throttle_percent / 100.0f) * 
+            (config_.max_throttle_ms - config_.min_throttle_ms);
+
+        // Convert to duty cycle (assuming 20ms period)
+        uint32_t target_duty = (target_pulse_width_ms / 20.0f) * ((1 << ESC_RESOLUTION_BITS) - 1);
+
+        // Ramp to target duty cycle
+        uint32_t current_duty = ledc_get_duty(config_.speed_mode, config_.channel);
+        if (current_duty == target_duty) return;
+
+        int step = (target_duty > current_duty) ? 1 : -1;
+        while (current_duty != target_duty) {
+            current_duty += step;
+            ledc_set_duty(config_.speed_mode, config_.channel, current_duty);
+            ledc_update_duty(config_.speed_mode, config_.channel);
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
     }
 
 private:
