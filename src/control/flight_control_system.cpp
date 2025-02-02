@@ -106,7 +106,7 @@ bool flight_control_system::init() {
     };
 
     const std::array<float, 4> calib_offset = {
-        15.0f, 2.0f, -2.0f, -5.0f
+        19.0f, 2.0f, -2.0f, -5.0f
     };
 
     for (size_t i = 0; i < servos_.size(); ++i) {
@@ -123,8 +123,8 @@ bool flight_control_system::init() {
     ESP_LOGI(TAG, "Servos initialized successfully");
 
     esc_controller::config esc_config {
-        .pin = GPIO_NUM_19,
-        .channel = LEDC_CHANNEL_1,
+        .pin = GPIO_NUM_27,
+        .channel = LEDC_CHANNEL_4,
         .timer_num = LEDC_TIMER_1,
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .min_throttle_ms = 1.0f,  // 1ms
@@ -135,8 +135,13 @@ bool flight_control_system::init() {
     if (!esc_->init()) {
         return false;
     }
-
     ESP_LOGI(TAG, "ESC initialized successfully");
+
+    pitch_attitude_pid_ = std::make_unique<pid_controller>(pid_configs_.pitch_attitude);
+    yaw_attitude_pid_ = std::make_unique<pid_controller>(pid_configs_.yaw_attitude);
+    roll_rate_pid_ = std::make_unique<pid_controller>(pid_configs_.roll_rate);
+    pitch_rate_pid_ = std::make_unique<pid_controller>(pid_configs_.pitch_rate);
+    yaw_rate_pid_ = std::make_unique<pid_controller>(pid_configs_.yaw_rate);
     
     return true;
 }
@@ -233,18 +238,18 @@ void flight_control_system::sensor_fusion_task(void* param) {
             system.filter_state_.pitch = (1.0f - alpha) * gyro_pitch + alpha * accel_pitch;
             system.filter_state_.yaw = (1.0f - alpha) * gyro_yaw + alpha * accel_yaw;
             
-            if (log_counter++ % 10 == 0) {
-                // log raw imu readings
-                ESP_LOGI(TAG, "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
-                    imu_reading.accel[0], imu_reading.accel[1], imu_reading.accel[2],
-                    imu_reading.gyro[0], imu_reading.gyro[1], imu_reading.gyro[2]
-                );
-                ESP_LOGI(TAG, "Apitch: %.2f, Ayaw: %.2f; Gpitch: %.2f, Gyaw: %.2f", 
-                    accel_pitch, accel_yaw, gyro_pitch, gyro_yaw);
-                ESP_LOGI(TAG, "Roll: %.2f, Pitch: %.2f, Yaw: %.2f",
-                    system.filter_state_.roll, system.filter_state_.pitch, system.filter_state_.yaw
-                );
-            }
+            // if (log_counter++ % 10 == 0) {
+            //     // log raw imu readings
+            //     ESP_LOGI(TAG, "IMU reading: Accel: (%.2f, %.2f, %.2f), Gyro: (%.2f, %.2f, %.2f)",
+            //         imu_reading.accel[0], imu_reading.accel[1], imu_reading.accel[2],
+            //         imu_reading.gyro[0], imu_reading.gyro[1], imu_reading.gyro[2]
+            //     );
+            //     ESP_LOGI(TAG, "Apitch: %.2f, Ayaw: %.2f; Gpitch: %.2f, Gyaw: %.2f", 
+            //         accel_pitch, accel_yaw, gyro_pitch, gyro_yaw);
+            //     ESP_LOGI(TAG, "Roll: %.2f, Pitch: %.2f, Yaw: %.2f",
+            //         system.filter_state_.roll, system.filter_state_.pitch, system.filter_state_.yaw
+            //     );
+            // }
         }
         system.filter_state_.last_update = current_ticks;
 
@@ -292,6 +297,12 @@ void flight_control_system::control_task(void* param) {
     auto& system = *static_cast<flight_control_system*>(param);
     flight_control_system::attitude_estimate attitude;
 
+    int delayed_i, i = 0;
+    float throttle_percent;
+    float counter_angle;
+    float max_throttle_percent = 25.0f;
+    float rpm_counter_coeff = 0.4f;
+
     while (true) {
         if (xSemaphoreTake(system.attitude_data_.mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
             attitude = system.attitude_data_.latest_estimate;
@@ -300,10 +311,26 @@ void flight_control_system::control_task(void* param) {
             //     attitude.roll, attitude.pitch, attitude.yaw
             // );
         }
-        system.servos_[0]->set_angle(attitude.pitch + attitude.yaw);
-        system.servos_[1]->set_angle(-attitude.pitch + attitude.yaw);
-        system.servos_[2]->set_angle(-attitude.pitch - attitude.yaw);
-        system.servos_[3]->set_angle(attitude.pitch - attitude.yaw);
+        // points to the ground, example servo mixing
+        // system.servos_[0]->set_angle(attitude.pitch + attitude.yaw);
+        // system.servos_[1]->set_angle(-attitude.pitch + attitude.yaw);
+        // system.servos_[2]->set_angle(-attitude.pitch - attitude.yaw);
+        // system.servos_[3]->set_angle(attitude.pitch - attitude.yaw);
+
+
+        // counters the torque
+        delayed_i = std::max(0, ++i-500); // delay the throttle up by 10 seconds
+        throttle_percent = -pow(cos(delayed_i * 0.01f), 2) * max_throttle_percent + max_throttle_percent;
+        system.esc_->set_throttle(throttle_percent);
+        
+        counter_angle = throttle_percent * rpm_counter_coeff;
+        ESP_LOGI(TAG, "throttle: %.2f%%, compen angle: %.2f", 
+            throttle_percent, -counter_angle);
+
+        system.servos_[0]->set_angle(-counter_angle);
+        system.servos_[1]->set_angle(-counter_angle);
+        system.servos_[2]->set_angle(-counter_angle);
+        system.servos_[3]->set_angle(-counter_angle);
 
         vTaskDelay(pdMS_TO_TICKS(20)); // 50Hz
     }
@@ -357,19 +384,19 @@ bool flight_control_system::start() {
         return false;
     }
 
-    ret = xTaskCreatePinnedToCore(
-        mag_task,
-        "mag_task",
-        4096,
-        this,
-        configMAX_PRIORITIES - 6,
-        &mag_task_handle_,
-        1
-    );
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create magnetometer task");
-        return false;
-    }
+    // ret = xTaskCreatePinnedToCore(
+    //     mag_task,
+    //     "mag_task",
+    //     4096,
+    //     this,
+    //     configMAX_PRIORITIES - 6,
+    //     &mag_task_handle_,
+    //     1
+    // );
+    // if (ret != pdPASS) {
+    //     ESP_LOGE(TAG, "Failed to create magnetometer task");
+    //     return false;
+    // }
 
 
     ret = xTaskCreatePinnedToCore(
