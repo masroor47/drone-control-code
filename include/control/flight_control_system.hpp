@@ -5,15 +5,15 @@
 
 #include <memory>
 
+#include "control/pid_controller.hpp"
+#include "control/flight_control_config.hpp"
 #include "sensors/mpu_6050.hpp"
 #include "sensors/bmp_280.hpp"
 #include "sensors/gy_271.hpp"
 #include "actuators/servo.hpp"
 #include "actuators/esc_controller.hpp"
-// #include "utils/thread_safe_queue.hpp"
 
 class flight_control_system {
-// std::atomic<bool> shutdown_requested_ = false;
 public:
     struct config {
         gpio_num_t i2c_sda;
@@ -47,11 +47,21 @@ public:
         SemaphoreHandle_t mutex;
     };
 
+    struct pid_configs {
+        pid_controller::config pitch_attitude;
+        pid_controller::config yaw_attitude;
+        pid_controller::config roll_rate;
+        pid_controller::config pitch_rate;
+        pid_controller::config yaw_rate;
+    };
+
+
     explicit flight_control_system(const config& cfg)
         : config_(cfg),
           imu_(nullptr),
           barometer_(nullptr),
-          servos_() {
+          servos_(),
+          pid_configs_(flight_control_config::default_pid_configs()) {
             imu_data_.mutex = xSemaphoreCreateMutex();
             barometer_data_.mutex = xSemaphoreCreateMutex();
             attitude_data_.mutex = xSemaphoreCreateMutex();
@@ -83,6 +93,17 @@ private:
     std::array<std::unique_ptr<servo>, 4> servos_;
     std::unique_ptr<esc_controller> esc_;
 
+    std::unique_ptr<pid_controller> pitch_attitude_pid_;
+    std::unique_ptr<pid_controller> yaw_attitude_pid_;
+    
+    // Rate PIDs
+    std::unique_ptr<pid_controller> roll_rate_pid_;
+    std::unique_ptr<pid_controller> pitch_rate_pid_;
+    std::unique_ptr<pid_controller> yaw_rate_pid_;
+    
+    // PID configurations
+    pid_configs pid_configs_;
+
     protected_imu_data imu_data_;
     protected_baro_data barometer_data_;
     protected_attitude_data attitude_data_;
@@ -96,7 +117,7 @@ private:
     } filter_state_;
     
     struct filter_params {
-        float alpha = 0.05f;
+        float alpha = 0.04f;
         float gyro_scale = 1.0f;
     } filter_params_;
 
