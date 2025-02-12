@@ -5,15 +5,16 @@
 
 #include <memory>
 
+#include "control/pid_controller.hpp"
+#include "control/pid_configs.hpp"
+#include "control/flight_control_config.hpp"
 #include "sensors/mpu_6050.hpp"
 #include "sensors/bmp_280.hpp"
 #include "sensors/gy_271.hpp"
 #include "actuators/servo.hpp"
 #include "actuators/esc_controller.hpp"
-// #include "utils/thread_safe_queue.hpp"
 
 class flight_control_system {
-// std::atomic<bool> shutdown_requested_ = false;
 public:
     struct config {
         gpio_num_t i2c_sda;
@@ -47,14 +48,26 @@ public:
         SemaphoreHandle_t mutex;
     };
 
+    struct protected_rate_setpoint_data {
+        struct {
+            float roll_rate;    // deg/s
+            float pitch_rate;   // deg/s
+            float yaw_rate;     // deg/s
+        } setpoints;
+        SemaphoreHandle_t mutex;
+    };
+
+
     explicit flight_control_system(const config& cfg)
         : config_(cfg),
           imu_(nullptr),
           barometer_(nullptr),
-          servos_() {
+          servos_(),
+          pid_configs_(flight_control_config::default_pid_configs()) {
             imu_data_.mutex = xSemaphoreCreateMutex();
             barometer_data_.mutex = xSemaphoreCreateMutex();
             attitude_data_.mutex = xSemaphoreCreateMutex();
+            rate_setpoint_data_.mutex = xSemaphoreCreateMutex();
           }
         
     ~flight_control_system() {
@@ -66,6 +79,9 @@ public:
         }
         if (attitude_data_.mutex != nullptr) {
             vSemaphoreDelete(attitude_data_.mutex);
+        }
+        if (rate_setpoint_data_.mutex != nullptr) {
+            vSemaphoreDelete(rate_setpoint_data_.mutex);
         }
         ESP_LOGI("FlightControl", "Shutting down flight control system");
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -83,9 +99,21 @@ private:
     std::array<std::unique_ptr<servo>, 4> servos_;
     std::unique_ptr<esc_controller> esc_;
 
+    std::unique_ptr<pid_controller> pitch_attitude_pid_;
+    std::unique_ptr<pid_controller> yaw_attitude_pid_;
+    
+    // Rate PIDs
+    std::unique_ptr<pid_controller> roll_rate_pid_;
+    std::unique_ptr<pid_controller> pitch_rate_pid_;
+    std::unique_ptr<pid_controller> yaw_rate_pid_;
+    
+    // PID configurations
+    pid_configs pid_configs_;
+
     protected_imu_data imu_data_;
     protected_baro_data barometer_data_;
     protected_attitude_data attitude_data_;
+    protected_rate_setpoint_data rate_setpoint_data_;
 
     struct filter_state {
         // pitch roll yaw
@@ -96,19 +124,31 @@ private:
     } filter_state_;
     
     struct filter_params {
-        float alpha = 0.05f;
+        float alpha = 0.04f;
         float gyro_scale = 1.0f;
     } filter_params_;
 
-    static void control_task(void* param);
+    
     static void imu_task(void* param);
-    static void barometer_task(void* param);
-    static void mag_task(void* param);
-    static void sensor_fusion_task(void* param);
-    TaskHandle_t control_task_handle_;
     TaskHandle_t imu_task_handle_;
+
+    static void barometer_task(void* param);
     TaskHandle_t barometer_task_handle_;
+
+    static void mag_task(void* param);
     TaskHandle_t mag_task_handle_;
+
+    static void sensor_fusion_task(void* param);
     TaskHandle_t sensor_fusion_task_handle_;
+
+    static void attitude_control_task(void* param);
+    TaskHandle_t attitude_control_task_handle_;
+
+    static void rate_control_task(void* param);
+    TaskHandle_t rate_control_task_handle_;
+
+    static void control_task(void* param);
+    TaskHandle_t control_task_handle_;
+
     void scan_i2c();
 };
