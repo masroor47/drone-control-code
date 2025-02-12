@@ -5,9 +5,11 @@
 #include "esp_task_wdt.h"
 
 #include <memory>
+#include <cstring>  // for memcpy
 
 #include "esp_log.h"
 #include "control/pid_controller.hpp"
+#include "control/rc_mapper.hpp"
 #include "drivers/i2c_master.hpp"
 #include "sensors/mpu_6050.hpp"
 #include "sensors/bmp_280.hpp"
@@ -15,6 +17,8 @@
 #include "actuators/servo.hpp"
 #include "actuators/esc_controller.hpp"
 #include "utils/thread_safe_queue.hpp"
+
+#include "radio/crsf.h"
 
 
 
@@ -389,16 +393,39 @@ float calculate_throttle(int elapsed_ms, float max_throttle = 25.0f) {
 
 void flight_control_system::rate_control_task(void* param) {
     auto& system = *static_cast<flight_control_system*>(param);
+    rc_mapper::mapped_channels mapped_channels;
+
     TickType_t last_wake_time = xTaskGetTickCount();
     int tick = 0;
     const int period_ms = 20;
     const TickType_t period = pdMS_TO_TICKS(20);  // 50Hz
 
+    uint16_t rc_channels[RC_INPUT_MAX_CHANNELS];
+    uint16_t num_channels;
+
     float throttle_percent;
     
     float test_angle = 0;
 
+    TickType_t timestamp;
+
     while (true) {
+
+        if (xSemaphoreTake(system.rc_data_.mutex, portMAX_DELAY) == pdTRUE) {
+            memcpy(rc_channels, system.rc_data_.data.channels, 
+                   sizeof(uint16_t) * 5);
+            xSemaphoreGive(system.rc_data_.mutex);
+        }
+        mapped_channels = rc_mapper::map_channels(rc_channels);
+        ESP_LOGI(TAG, "RC channels: %d, %d, %d, %d, %d; Mapped RC: roll=%.1f° pitch=%.1f° throttle=%.1f%% yaw=%.1f rad/s armed=%d",
+            rc_channels[0], rc_channels[1], rc_channels[2], rc_channels[3], rc_channels[4],
+            mapped_channels.roll_angle_deg,
+            mapped_channels.pitch_angle_deg,
+            mapped_channels.throttle_percent,
+            mapped_channels.yaw_rate_rad_s,
+            mapped_channels.armed
+        );
+
         // Get latest rate setpoints
         float roll_rate_sp, pitch_rate_sp, yaw_rate_sp;
         if (xSemaphoreTake(system.rate_setpoint_data_.mutex, portMAX_DELAY) == pdTRUE) {;
@@ -458,6 +485,62 @@ void flight_control_system::rate_control_task(void* param) {
         system.servos_[3]->set_angle(test_angle);
         
         vTaskDelayUntil(&last_wake_time, period);
+    }
+}
+
+void flight_control_system::rc_receiver_task(void* param) {
+    auto* fcs = static_cast<flight_control_system*>(param);
+    const size_t rx_buffer_size = 256;
+    uint8_t rx_buffer[rx_buffer_size];
+    
+    // Configure UART
+    uart_config_t uart_config = {
+        .baud_rate = (int)fcs->config_.rc_receiver.baud_rate,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_APB,
+    };
+    // ESP_LOGI(TAG, "Configuring UART%d", (int)fcs->config_.rc_receiver.uart_num);
+    
+    ESP_ERROR_CHECK(uart_driver_install(fcs->config_.rc_receiver.uart_num, rx_buffer_size * 2, 0, 0, NULL, 0));
+    ESP_ERROR_CHECK(uart_param_config(fcs->config_.rc_receiver.uart_num, &uart_config));
+    ESP_ERROR_CHECK(uart_set_pin(fcs->config_.rc_receiver.uart_num, 
+                                fcs->config_.rc_receiver.tx_pin,
+                                fcs->config_.rc_receiver.rx_pin,
+                                UART_PIN_NO_CHANGE,
+                                UART_PIN_NO_CHANGE));
+
+    int tick = 0;
+    while (true) {
+        int length = uart_read_bytes(fcs->config_.rc_receiver.uart_num, 
+                                   rx_buffer,
+                                   CRSF_BUFFER_SIZE,
+                                   pdMS_TO_TICKS(10));
+        
+        if (length > 0) {
+            uint16_t temp_channels[RC_INPUT_MAX_CHANNELS];
+            uint16_t num_channels;
+            
+            if (crsf_parse(rx_buffer, length, temp_channels, &num_channels, RC_INPUT_MAX_CHANNELS) == 0) {
+                if (xSemaphoreTake(fcs->rc_data_.mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                    memcpy(fcs->rc_data_.data.channels, temp_channels, sizeof(uint16_t) * num_channels);
+                    fcs->rc_data_.data.num_channels = num_channels;
+                    fcs->rc_data_.data.last_update = xTaskGetTickCount();
+                    xSemaphoreGive(fcs->rc_data_.mutex);
+
+                    // if (++tick % 10 == 0) {
+                    //     ESP_LOGI(TAG, "Channels: %d, %d, %d, %d, %d, %d",
+                    //         temp_channels[0], temp_channels[1], temp_channels[2], temp_channels[3],
+                    //         temp_channels[4], temp_channels[5]
+                    //     );
+                    // }
+                }
+            }
+
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
@@ -561,6 +644,20 @@ bool flight_control_system::start() {
     );
     if (ret != pdPASS) {
         ESP_LOGE(TAG, "Failed to create rate control task");
+        return false;
+    }
+
+    ret = xTaskCreatePinnedToCore(
+        rc_receiver_task,
+        "rc_receiver_task",
+        4096,
+        this,
+        configMAX_PRIORITIES - 3,
+        &rc_receiver_task_handle_,
+        0
+    );
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create RC receiver task");
         return false;
     }
 
