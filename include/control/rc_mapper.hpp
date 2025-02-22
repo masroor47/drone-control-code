@@ -7,7 +7,7 @@ public:
     // Configuration constants
     static constexpr float MAX_ANGLE_DEG = 45.0f;  // Maximum roll/pitch angle in degrees
     static constexpr float MAX_YAW_RATE_RAD_S = 3.14159f;  // Maximum yaw rate in rad/s
-    static constexpr float MAX_THROTTLE_PERCENT = 80.0f;  // Maximum allowed throttle
+    static constexpr float MAX_THROTTLE_PERCENT = 50.0f;  // Maximum allowed throttle
     
     // RC input ranges (adjust based on your transmitter)
     static constexpr uint16_t RC_MIN = 1000;
@@ -35,8 +35,12 @@ public:
             rc_channels[1], RC_MIN, RC_MAX, -MAX_ANGLE_DEG, MAX_ANGLE_DEG);
             
         // Map throttle to percentage, limiting maximum
-        mapped.throttle_percent = map_range(
-            rc_channels[2], RC_MIN, RC_MAX, 0.0f, MAX_THROTTLE_PERCENT);
+        if (rc_channels[2] > RC_MAX + 100) {
+            mapped.throttle_percent = 0;
+        } else {
+            mapped.throttle_percent = map_range(
+                rc_channels[2], RC_MIN, RC_MAX, 0.0f, MAX_THROTTLE_PERCENT);
+        }
 
         // Map yaw to rate range
         mapped.yaw_rate_rad_s = map_range_symmetric(
