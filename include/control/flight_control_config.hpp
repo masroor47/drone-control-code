@@ -19,7 +19,16 @@ struct flight_control_config {
             .integrator_max = 10.0f,
             .derivative_lpf_alpha = 0.1f
         };
-        configs.yaw_attitude = configs.pitch_attitude;
+        configs.yaw_attitude = {
+            .kp = 0.0f,
+            .ki = 0.0f,
+            .kd = 0.0f,
+            .output_min = -M_PI/4,  // rad/s = 45 deg/s
+            .output_max = M_PI/4,   // rad/s = 45 deg/s
+            .integrator_min = -10.0f,
+            .integrator_max = 10.0f,
+            .derivative_lpf_alpha = 0.1f
+        };
 
 
         // Rate PIDs
