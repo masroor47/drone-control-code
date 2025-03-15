@@ -10,6 +10,7 @@
 #include "control/pid_configs.hpp"
 #include "control/flight_control_config.hpp"
 #include "sensors/mpu_6050.hpp"
+// #include "sensors/bmi_160.hpp"
 #include "sensors/bmp_280.hpp"
 #include "sensors/gy_271.hpp"
 #include "actuators/servo.hpp"
@@ -47,6 +48,7 @@ public:
 
     struct protected_imu_data {
         mpu_6050::mpu_reading latest_reading;
+        // bmi_160::mpu_reading latest_reading;
         SemaphoreHandle_t mutex;
     };
 
@@ -125,6 +127,7 @@ private:
 
     const config config_;
     std::unique_ptr<mpu_6050> imu_;
+    // std::unique_ptr<bmi_160> imu_;
     std::unique_ptr<bmp_280> barometer_;
     std::unique_ptr<gy_271> mag_;
     std::array<std::unique_ptr<servo>, 4> servos_;
