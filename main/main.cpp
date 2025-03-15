@@ -14,9 +14,15 @@ extern "C" void app_main(void)
         .i2c_scl = GPIO_NUM_22,
         .i2c_freq = 400000,
         .servo1_pin = GPIO_NUM_15,
-        .servo2_pin = GPIO_NUM_32,
-        .servo3_pin = GPIO_NUM_12,
-        .servo4_pin = GPIO_NUM_13,
+        .servo2_pin = GPIO_NUM_12,
+        .servo3_pin = GPIO_NUM_25,
+        .servo4_pin = GPIO_NUM_32,
+        .rc_receiver = {
+            .rx_pin = GPIO_NUM_16,
+            .tx_pin = GPIO_NUM_17,
+            .uart_num = UART_NUM_2,
+            .baud_rate = 420000
+        },
     };
 
     system = std::make_unique<flight_control_system>(config);

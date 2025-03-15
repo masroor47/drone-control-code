@@ -1,4 +1,5 @@
 #include <algorithm>
+#include "esp_log.h"
 #include "control/pid_controller.hpp"
 
 float pid_controller::update(float setpoint, float measurement, float dt) {
@@ -32,6 +33,8 @@ float pid_controller::update(float setpoint, float measurement, float dt) {
 
     // Calculate total output
     float output = p_term + i_term + d_term;
+    // ESP_LOGI("pid", "PID output: %.2f, P: %.2f, I: %.2f, D: %.2f", 
+    //     output, p_term, i_term, d_term);
 
     // Clamp output
     output = std::clamp(output, config_.output_min, config_.output_max);

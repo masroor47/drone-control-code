@@ -1,5 +1,6 @@
 #pragma once
 #include "freertos/FreeRTOS.h"
+#include "driver/uart.h"
 
 #include "esp_log.h"
 
@@ -9,6 +10,7 @@
 #include "control/pid_configs.hpp"
 #include "control/flight_control_config.hpp"
 #include "sensors/mpu_6050.hpp"
+// #include "sensors/bmi_160.hpp"
 #include "sensors/bmp_280.hpp"
 #include "sensors/gy_271.hpp"
 #include "actuators/servo.hpp"
@@ -24,6 +26,12 @@ public:
         gpio_num_t servo2_pin;
         gpio_num_t servo3_pin;
         gpio_num_t servo4_pin;
+        struct {
+            gpio_num_t rx_pin;
+            gpio_num_t tx_pin;
+            uart_port_t uart_num;
+            uint32_t baud_rate;
+        } rc_receiver;
     };
 
     struct attitude_estimate {
@@ -40,6 +48,7 @@ public:
 
     struct protected_imu_data {
         mpu_6050::mpu_reading latest_reading;
+        // bmi_160::mpu_reading latest_reading;
         SemaphoreHandle_t mutex;
     };
 
@@ -57,6 +66,18 @@ public:
         SemaphoreHandle_t mutex;
     };
 
+    static constexpr uint8_t RC_INPUT_MAX_CHANNELS = 16;
+
+    struct protected_rc_data {
+        struct {
+            uint16_t channels[RC_INPUT_MAX_CHANNELS];
+            uint16_t num_channels;
+            TickType_t last_update;
+        } data;
+        SemaphoreHandle_t mutex;
+    };
+
+    bool get_rc_channels(uint16_t*, uint16_t*, TickType_t*); 
 
     explicit flight_control_system(const config& cfg)
         : config_(cfg),
@@ -68,6 +89,7 @@ public:
             barometer_data_.mutex = xSemaphoreCreateMutex();
             attitude_data_.mutex = xSemaphoreCreateMutex();
             rate_setpoint_data_.mutex = xSemaphoreCreateMutex();
+            rc_data_.mutex = xSemaphoreCreateMutex();
           }
         
     ~flight_control_system() {
@@ -83,6 +105,9 @@ public:
         if (rate_setpoint_data_.mutex != nullptr) {
             vSemaphoreDelete(rate_setpoint_data_.mutex);
         }
+        if (rc_data_.mutex != nullptr) {
+            vSemaphoreDelete(rc_data_.mutex);
+        }
         ESP_LOGI("FlightControl", "Shutting down flight control system");
         vTaskDelay(pdMS_TO_TICKS(100));
     }
@@ -92,8 +117,17 @@ public:
 
 private:
     static constexpr char* TAG = "FlightControl";
+    
+    static constexpr uint8_t UART_PORT = UART_NUM_2;
+    static constexpr uint8_t TXD_PIN = 17;
+    static constexpr uint8_t RXD_PIN = 16;
+    static constexpr uint32_t BAUD_RATE = 420000;
+    static constexpr uint8_t CRSF_BUFFER_SIZE = 25;
+    
+
     const config config_;
     std::unique_ptr<mpu_6050> imu_;
+    // std::unique_ptr<bmi_160> imu_;
     std::unique_ptr<bmp_280> barometer_;
     std::unique_ptr<gy_271> mag_;
     std::array<std::unique_ptr<servo>, 4> servos_;
@@ -114,6 +148,7 @@ private:
     protected_baro_data barometer_data_;
     protected_attitude_data attitude_data_;
     protected_rate_setpoint_data rate_setpoint_data_;
+    protected_rc_data rc_data_;
 
     struct filter_state {
         // pitch roll yaw
@@ -128,7 +163,6 @@ private:
         float gyro_scale = 1.0f;
     } filter_params_;
 
-    
     static void imu_task(void* param);
     TaskHandle_t imu_task_handle_;
 
@@ -149,6 +183,9 @@ private:
 
     static void control_task(void* param);
     TaskHandle_t control_task_handle_;
+
+    static void rc_receiver_task(void* param);
+    TaskHandle_t rc_receiver_task_handle_;
 
     void scan_i2c();
 };
