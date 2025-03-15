@@ -23,6 +23,7 @@ public:
         float yaw_rate_rad_s;
         float throttle_percent;
         bool armed;
+        float wheel;
     };
 
     static mapped_channels map_channels(const uint16_t* rc_channels) {
@@ -34,7 +35,8 @@ public:
         mapped.pitch_angle_deg = map_range_symmetric(
             rc_channels[1], RC_MIN, RC_MAX, -MAX_ANGLE_DEG, MAX_ANGLE_DEG);
             
-        // Map throttle to percentage, limiting maximum
+        // Map throttle to percentage, limiting maximum. Value is high when not receiving signal
+        // TODO: fix, make it armed dependent
         if (rc_channels[2] > RC_MAX + 100) {
             mapped.throttle_percent = 0;
         } else {
@@ -48,6 +50,8 @@ public:
             
         // Map armed channel to boolean
         mapped.armed = rc_channels[4] > ARMED_THRESHOLD;
+
+        mapped.wheel = map_range(rc_channels[9], RC_MIN, RC_MAX, 0.0f, 1.0f);
         
         return mapped;
     }
