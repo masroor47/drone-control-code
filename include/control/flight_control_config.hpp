@@ -10,39 +10,48 @@ struct flight_control_config {
         
         // Attitude PIDs
         configs.pitch_attitude = {
-            .kp = 0.0f,
-            .ki = 0.0f,
-            .kd = 0.0f,
-            .output_min = -M_PI/4,  // rad/s = 45 deg/s
-            .output_max = M_PI/4,   // rad/s = 45 deg/s
-            .integrator_min = -10.0f,
-            .integrator_max = 10.0f,
+            .kp = 0.09f,
+            .ki = 0.01f,
+            .kd = 0.01f,
+            .output_min = -M_PI,  // -180 deg/s
+            .output_max = M_PI,   // 180 deg/s
+            .integrator_min = -M_PI,
+            .integrator_max = M_PI,
             .derivative_lpf_alpha = 0.1f
         };
         configs.yaw_attitude = {
-            .kp = 0.0f,
-            .ki = 0.0f,
-            .kd = 0.0f,
-            .output_min = -M_PI/4,  // rad/s = 45 deg/s
-            .output_max = M_PI/4,   // rad/s = 45 deg/s
-            .integrator_min = -10.0f,
-            .integrator_max = 10.0f,
+            .kp = 0.09f,
+            .ki = 0.01f,
+            .kd = 0.01f,
+            .output_min = -M_PI,  // -180 deg/s
+            .output_max = M_PI,   // 180 deg/s
+            .integrator_min = -M_PI,
+            .integrator_max = M_PI,
             .derivative_lpf_alpha = 0.1f
         };
 
 
         // Rate PIDs
         configs.pitch_rate = {
-            .kp = 7.0f,
-            .ki = 0.5f,
-            .kd = 0.0f,
+            .kp = 1.0f,
+            .ki = 0.0f,
+            .kd = 1.0f,
             .output_min = -45.0f,  // vane deflection angle
             .output_max = 45.0f,
             .integrator_min = -0.2f,
             .integrator_max = 0.2f,
             .derivative_lpf_alpha = 0.2f
         };
-        configs.yaw_rate = configs.pitch_rate;
+        configs.yaw_rate = {
+            .kp = 1.0f,
+            .ki = 0.0f,
+            .kd = 1.0f,
+            .output_min = -45.0f,  // vane deflection angle
+            .output_max = 45.0f,
+            .integrator_min = -0.2f,
+            .integrator_max = 0.2f,
+            .derivative_lpf_alpha = 0.2f
+        };
 
         configs.roll_rate = {
             .kp = 10.0f,
