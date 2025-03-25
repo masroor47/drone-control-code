@@ -5,6 +5,7 @@
 #include "esp_task_wdt.h"
 
 #include <memory>
+#include <algorithm>
 #include <cstring>  // for memcpy
 
 #include "esp_log.h"
@@ -427,12 +428,36 @@ void quad_fcs::rate_control_task(void* param) {
             //     );
         // }
 
-        float collective_throttle = mapped_channels.throttle_percent;
+        float armed_min_throttle = 15.0f;
 
-        const float motor1_throttle = collective_throttle + pitch_thrust - roll_thrust + yaw_thrust;
-        const float motor2_throttle = collective_throttle - pitch_thrust - roll_thrust - yaw_thrust;
-        const float motor3_throttle = collective_throttle + pitch_thrust + roll_thrust - yaw_thrust;
-        const float motor4_throttle = collective_throttle - pitch_thrust + roll_thrust + yaw_thrust;
+        // map throttle to account for armed min throttle
+        // when throttle stick is at 0, motors should be at armed_min_throttle
+        float collective_throttle = mapped_channels.throttle_percent * (0.85) + armed_min_throttle;
+
+        float motor1_throttle = collective_throttle + pitch_thrust - roll_thrust + yaw_thrust;
+        float motor2_throttle = collective_throttle - pitch_thrust - roll_thrust - yaw_thrust;
+        float motor3_throttle = collective_throttle + pitch_thrust + roll_thrust - yaw_thrust;
+        float motor4_throttle = collective_throttle - pitch_thrust + roll_thrust + yaw_thrust;
+
+        
+
+        if (mapped_channels.armed) {
+            motor1_throttle = std::clamp(motor1_throttle, armed_min_throttle, 100.0f);
+            motor2_throttle = std::clamp(motor2_throttle, armed_min_throttle, 100.0f);
+            motor3_throttle = std::clamp(motor3_throttle, armed_min_throttle, 100.0f);
+            motor4_throttle = std::clamp(motor4_throttle, armed_min_throttle, 100.0f);
+        } else {
+            motor1_throttle = 0.0f;
+            motor2_throttle = 0.0f;
+            motor3_throttle = 0.0f;
+            motor4_throttle = 0.0f;
+        }
+
+        if (tick++ % 10 == 0) {
+            ESP_LOGI(TAG, "Motor commands: %2.2f, %2.2f, %2.2f, %2.2f; RC Throttle: %2.2f",
+                motor1_throttle, motor2_throttle, motor3_throttle, motor4_throttle, collective_throttle
+            );
+        }
 
         system.motors_[0]->set_throttle(motor1_throttle);
         system.motors_[1]->set_throttle(motor2_throttle);
