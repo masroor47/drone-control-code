@@ -49,7 +49,12 @@ public:
             rc_channels[3], RC_MIN, RC_MAX, -MAX_YAW_RATE_RAD_S, MAX_YAW_RATE_RAD_S);
             
         // Map armed channel to boolean
-        mapped.armed = rc_channels[4] > ARMED_THRESHOLD;
+        // if channel value is unreasonably high, assume not armed
+        if (rc_channels[4] > RC_MAX + 100) {
+            mapped.armed = false;
+        } else {
+            mapped.armed = rc_channels[4] > ARMED_THRESHOLD;
+        }
 
         mapped.wheel = map_range(rc_channels[9], RC_MIN, RC_MAX, 0.0f, 1.0f);
         
