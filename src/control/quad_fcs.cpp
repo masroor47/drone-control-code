@@ -434,11 +434,20 @@ void quad_fcs::rate_control_task(void* param) {
         // when throttle stick is at 0, motors should be at armed_min_throttle
         float collective_throttle = mapped_channels.throttle_percent * (0.85) + armed_min_throttle;
 
-        float motor1_throttle = collective_throttle + pitch_thrust - roll_thrust + yaw_thrust;
-        float motor2_throttle = collective_throttle - pitch_thrust - roll_thrust - yaw_thrust;
-        float motor3_throttle = collective_throttle + pitch_thrust + roll_thrust - yaw_thrust;
-        float motor4_throttle = collective_throttle - pitch_thrust + roll_thrust + yaw_thrust;
+        pitch_thrust = rc_mapper::map_range_symmetric(
+            rc_channels[1], rc_mapper::RC_MIN, rc_mapper::RC_MAX, -3, 3
+        );
+        roll_thrust = rc_mapper::map_range_symmetric(
+            rc_channels[0], rc_mapper::RC_MIN, rc_mapper::RC_MAX, -3, 3
+        );
+        yaw_thrust = rc_mapper::map_range_symmetric(
+            rc_channels[3], rc_mapper::RC_MIN, rc_mapper::RC_MAX, -3, 3
+        );
 
+        float motor1_throttle = collective_throttle + pitch_thrust - roll_thrust - yaw_thrust;
+        float motor2_throttle = collective_throttle - pitch_thrust - roll_thrust + yaw_thrust;
+        float motor3_throttle = collective_throttle + pitch_thrust + roll_thrust + yaw_thrust;
+        float motor4_throttle = collective_throttle - pitch_thrust + roll_thrust - yaw_thrust;
         
 
         if (mapped_channels.armed) {
@@ -454,8 +463,8 @@ void quad_fcs::rate_control_task(void* param) {
         }
 
         if (tick++ % 10 == 0) {
-            ESP_LOGI(TAG, "Motor commands: %2.2f, %2.2f, %2.2f, %2.2f; RC Throttle: %2.2f",
-                motor1_throttle, motor2_throttle, motor3_throttle, motor4_throttle, collective_throttle
+            ESP_LOGI(TAG, "Motor commands: %2.2f, %2.2f, %2.2f, %2.2f; RC Throttle: %2.2f, Roll: %.2f, Pitch: %.2f, Yaw: %.2f",
+                motor1_throttle, motor2_throttle, motor3_throttle, motor4_throttle, collective_throttle, roll_thrust, pitch_thrust, yaw_thrust
             );
         }
 
