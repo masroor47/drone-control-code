@@ -61,18 +61,19 @@ public:
         return mapped;
     }
 
-private:
     static float map_range(uint16_t x, uint16_t in_min, uint16_t in_max, 
                             float out_min, float out_max) {
         float normalized = static_cast<float>(x - in_min) / (in_max - in_min);
         normalized = std::clamp(normalized, 0.0f, 1.0f);
         return out_min + normalized * (out_max - out_min);
     }
-    
     static float map_range_symmetric(uint16_t x, uint16_t in_min, uint16_t in_max,
                                     float out_min, float out_max) {
         float normalized = static_cast<float>(x - RC_MID) / (RC_MAX - RC_MID);
         normalized = std::clamp(normalized, -1.0f, 1.0f);
         return normalized * std::max(std::abs(out_min), std::abs(out_max));
     }
+
+private:
+
 };
