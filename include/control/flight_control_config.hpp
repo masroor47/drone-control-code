@@ -10,32 +10,32 @@ struct flight_control_config {
         
         // Attitude PIDs
         configs.pitch_attitude = {
-            .kp = 0.09f,
-            .ki = 0.01f,
-            .kd = 0.01f,
-            .output_min = -M_PI,  // -180 deg/s
-            .output_max = M_PI,   // 180 deg/s
-            .integrator_min = -M_PI,
-            .integrator_max = M_PI,
+            .kp = 12.0f,
+            .ki = 0.00f,
+            .kd = 0.00f,
+            .output_min = -M_PI * 1.5,  // -180 deg/s
+            .output_max = M_PI * 1.5,   // 180 deg/s
+            .integrator_min = -M_PI * 1.5,
+            .integrator_max = M_PI * 1.5,
             .derivative_lpf_alpha = 0.1f
         };
         configs.yaw_attitude = {
-            .kp = 0.09f,
-            .ki = 0.01f,
-            .kd = 0.01f,
-            .output_min = -M_PI,  // -180 deg/s
-            .output_max = M_PI,   // 180 deg/s
-            .integrator_min = -M_PI,
-            .integrator_max = M_PI,
+            .kp = 12.0f,
+            .ki = 0.00f,
+            .kd = 0.00f,
+            .output_min = -M_PI * 1.5,  // -180 deg/s
+            .output_max = M_PI * 1.5,   // 180 deg/s
+            .integrator_min = -M_PI * 1.5,
+            .integrator_max = M_PI * 1.5,
             .derivative_lpf_alpha = 0.1f
         };
 
 
         // Rate PIDs
         configs.pitch_rate = {
-            .kp = 1.0f,
+            .kp = 2.0f,
             .ki = 0.0f,
-            .kd = 1.0f,
+            .kd = 1.2f,
             .output_min = -45.0f,  // vane deflection angle
             .output_max = 45.0f,
             .integrator_min = -0.2f,
@@ -43,9 +43,9 @@ struct flight_control_config {
             .derivative_lpf_alpha = 0.2f
         };
         configs.yaw_rate = {
-            .kp = 1.0f,
+            .kp = 2.0f,
             .ki = 0.0f,
-            .kd = 1.0f,
+            .kd = 1.2f,
             .output_min = -45.0f,  // vane deflection angle
             .output_max = 45.0f,
             .integrator_min = -0.2f,
