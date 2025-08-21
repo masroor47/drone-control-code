@@ -111,7 +111,7 @@ bool flight_control_system::init() {
     };
 
     const std::array<float, 4> calib_offset = {
-        -7.0f, 6.0f, -5.0f, -7.0f
+        -12.0f, 6.0f, -5.0f, 7.0f
     };
 
     for (size_t i = 0; i < servos_.size(); ++i) {
@@ -377,13 +377,13 @@ void flight_control_system::attitude_control_task(void* param) {
         float desired_yaw_rate = system.yaw_attitude_pid_->update(
             yaw_angle_sp, current_attitude.yaw, 0.01f);
 
-        if (tick++ % 4 == 0) {
-            ESP_LOGI(TAG, "Attitude: Desired: %.2f, %.2f; Current: %.2f, Yaw: %.2f; Desired rates: %.2f, %.2f",
-                pitch_angle_sp, yaw_angle_sp,
-                current_attitude.pitch, current_attitude.yaw, 
-                desired_pitch_rate, desired_yaw_rate
-            );
-        }
+        // if (tick++ % 4 == 0) {
+        //     ESP_LOGI(TAG, "Attitude: Desired: %.2f, %.2f; Current: %.2f, Yaw: %.2f; Desired rates: %.2f, %.2f",
+        //         pitch_angle_sp, yaw_angle_sp,
+        //         current_attitude.pitch, current_attitude.yaw, 
+        //         desired_pitch_rate, desired_yaw_rate
+        //     );
+        // }
         
         // Update rate setpoints
         if (xSemaphoreTake(system.rate_setpoint_data_.mutex, pdMS_TO_TICKS(5)) == pdTRUE) {;
@@ -473,14 +473,17 @@ void flight_control_system::rate_control_task(void* param) {
         gyro_data = system.imu_data_.latest_reading;
         xSemaphoreGive(system.imu_data_.mutex);
         
-        // roll_rate_sp = mapped_channels.yaw_rate_rad_s;
-        roll_rate_sp = 0.0;
+        // pitch_rate_sp = -mapped_channels.pitch_angle_deg * 0.5f; // Convert to rate
+        // yaw_rate_sp = 0.0f;
+        // yaw_rate_sp = mapped_channels.roll_angle_deg * 0.5f; // Convert to rate
+        roll_rate_sp = mapped_channels.yaw_rate_rad_s;
+        // roll_rate_sp = 0.0f;
 
         // pitch_rate_sp = 0.0f;
         // yaw_rate_sp = 0.0f;
 
         // precession correction here, not in rate control
-        float theta_rad = 0.5 * M_PI / 2;
+        float theta_rad = mapped_channels.wheel * M_PI / 2;
 
         float pitch_rate_sp_coupled = pitch_rate_sp * cos(theta_rad) + yaw_rate_sp * sin(theta_rad);
         float yaw_rate_sp_coupled = -pitch_rate_sp * sin(theta_rad) + yaw_rate_sp * cos(theta_rad);
@@ -496,24 +499,23 @@ void flight_control_system::rate_control_task(void* param) {
         float yaw_thrust = -system.yaw_rate_pid_->update(
             yaw_rate_sp_coupled, -gyro_data.gyro[2], 0.005f);
 
-
         // float pitch_thrust = mapped_channels.pitch_angle_deg;
         // float yaw_thrust = -mapped_channels.roll_angle_deg;
         // yaw_thrust = 0;
 
-        // Precession compensation
-        // throttle_percent = calculate_throttle(++tick * period_ms);
         throttle_percent = mapped_channels.throttle_percent;
         system.esc_->set_throttle(throttle_percent);
 
         float K_PRECESSION = 0.0f;
-        // float K_PRECESSION = mapped_channels.wheel;
-        const float precession_gain = K_PRECESSION;// * throttle_percent;  // Experimentally determined
-        const float comp_pitch = pitch_thrust*(1-precession_gain) + precession_gain * yaw_thrust;
-        const float comp_yaw = yaw_thrust*(1-precession_gain) - precession_gain * pitch_thrust;
+        // float K_PRECESSION = mapped_channels.wheel * 100.0f;
+        // const float precession_gain = K_PRECESSION;// * throttle_percent;  // Experimentally determined
+        // const float comp_pitch = pitch_thrust*(1-precession_gain) + precession_gain * yaw_thrust;
+        // const float comp_yaw = yaw_thrust*(1-precession_gain) - precession_gain * pitch_thrust;
+        const float comp_pitch = pitch_thrust + K_PRECESSION * gyro_data.gyro[2]; // perpendicular component for precession
+        const float comp_yaw = yaw_thrust + K_PRECESSION * gyro_data.gyro[0]; // perpendicular component for precession
 
         // Torque compensation
-        float K_TORQUE = 0.35f;  // Example torque gain
+        float K_TORQUE = 0.35f;
         float counter_torque_angle = throttle_percent * K_TORQUE;
         
         const float servo1_cmd = -comp_pitch - comp_yaw + roll_thrust - counter_torque_angle;
