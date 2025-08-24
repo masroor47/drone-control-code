@@ -4,8 +4,20 @@
 
 #include "esp_task_wdt.h"
 
+#include <esp_wifi.h>
+#include <esp_event.h>
+#include <esp_system.h>
+#include <nvs_flash.h>
+#include <sys/param.h>
+#include "esp_netif.h"
+#include "esp_eth.h"
+#include "esp_http_server.h"
+
+#include "cJSON.h"
+
 #include <memory>
 #include <cstring>  // for memcpy
+#include "freertos/queue.h"
 
 #include "esp_log.h"
 #include "control/pid_controller.hpp"
@@ -36,6 +48,19 @@ void flight_control_system::scan_i2c() {
 
 
 bool flight_control_system::init() {
+
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvs_flash_init();
+    }
+
+    wifi_init_ap();
+    ws_server_ = start_webserver();
+    if (ws_server_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to start WS server");
+        return false;
+    }
 
     if (!i2c_master::get_instance().init(config_.i2c_sda, config_.i2c_scl, config_.i2c_freq)) {
         ESP_LOGE(TAG, "Failed to initialize I2C master");
@@ -526,24 +551,30 @@ void flight_control_system::rate_control_task(void* param) {
         // ESP_LOGI(TAG, "motor: %2f%%, gyro: %.2f, %.2f, %.2f; pitch_th: %.2f, yaw_th: %.2f; roll_th: %.2f,  comp_pitch: %.2f, comp_yaw: %.2f",
         //     throttle_percent, gyro_data.gyro[0], gyro_data.gyro[1], gyro_data.gyro[2], pitch_thrust, yaw_thrust, roll_thrust, comp_pitch, comp_yaw
         // );
-        if (tick++ % 8 == 0) {
-            ESP_LOGI(TAG, "Coupled Desired Rates: %.2f, %.2f; gyro: %.2f, %.2f, %.2f; pitch_thrust: %.2f, yaw_thrust: %.2f, K_PREC: %.2f",
-                pitch_rate_sp_coupled, yaw_rate_sp_coupled,
-                gyro_data.gyro[0], gyro_data.gyro[1], gyro_data.gyro[2],
-                pitch_thrust, yaw_thrust, K_PRECESSION
-            );
+        // if (tick++ % 8 == 0) {
+        //     ESP_LOGI(TAG, "Coupled Desired Rates: %.2f, %.2f; gyro: %.2f, %.2f, %.2f; pitch_thrust: %.2f, yaw_thrust: %.2f, K_PREC: %.2f",
+        //         pitch_rate_sp_coupled, yaw_rate_sp_coupled,
+        //         gyro_data.gyro[0], gyro_data.gyro[1], gyro_data.gyro[2],
+        //         pitch_thrust, yaw_thrust, K_PRECESSION
+        //     );
             // ESP_LOGI(TAG, "Rate sp: %2.2f, %2.2f, %2.2f; throttle: %2.2f; Servo commands: %2.2f, %2.2f, %2.2f, %2.2f",
             //     roll_rate_sp, pitch_rate_sp, yaw_rate_sp, throttle_percent,
             //         servo1_cmd, servo2_cmd, servo3_cmd, servo4_cmd
             //     );
-        }
-
-
+        // }
 
         system.servos_[0]->set_angle(servo1_cmd);
         system.servos_[1]->set_angle(servo2_cmd);
         system.servos_[2]->set_angle(servo3_cmd);
         system.servos_[3]->set_angle(servo4_cmd);
+
+        thrust_setpoints thrust_sp = {
+            .pitch_thrust = comp_pitch,
+            .roll_thrust = roll_thrust,
+            .yaw_thrust = comp_yaw
+        };
+
+        system.update_telemetry_snapshot(thrust_sp);
 
         vTaskDelayUntil(&last_wake_time, period);
     }
@@ -604,6 +635,209 @@ void flight_control_system::rc_receiver_task(void* param) {
         }
         vTaskDelay(pdMS_TO_TICKS(1));
     }
+}
+
+void flight_control_system::update_telemetry_snapshot(thrust_setpoints thrust_sp) {
+    telemetry_snapshot snap;
+    snap.timestamp = xTaskGetTickCount();
+
+    // Lock and copy from protected data (add error checks)
+    xSemaphoreTake(attitude_data_.mutex, portMAX_DELAY);
+    snap.attitude = attitude_data_.latest_estimate;
+    xSemaphoreGive(attitude_data_.mutex);
+
+    xSemaphoreTake(imu_data_.mutex, portMAX_DELAY);
+    snap.imu = imu_data_.latest_reading;
+    xSemaphoreGive(imu_data_.mutex);
+
+    xSemaphoreTake(barometer_data_.mutex, portMAX_DELAY);
+    snap.baro = barometer_data_.latest_reading;
+    xSemaphoreGive(barometer_data_.mutex);
+
+    xSemaphoreTake(rc_data_.mutex, portMAX_DELAY);
+    memcpy(snap.rc_channels, rc_data_.data.channels, sizeof(uint16_t) * 10);
+    xSemaphoreGive(rc_data_.mutex);
+
+    xSemaphoreTake(rate_setpoint_data_.mutex, portMAX_DELAY);
+    snap.rate_sp = rate_setpoint_data_.setpoints;
+    xSemaphoreGive(rate_setpoint_data_.mutex);
+
+    snap.thrust_sp = thrust_sp;
+
+    xSemaphoreTake(telemetry_data_.mutex, portMAX_DELAY);
+    telemetry_data_.buffer.push_back(snap);
+    if (telemetry_data_.buffer.size() > telemetry_data_.max_buffer_size) {
+        telemetry_data_.buffer.erase(telemetry_data_.buffer.begin());  // FIFO
+        // ESP_LOGI(TAG, "Telemetry buffer full, dropping oldest snapshot");
+    }
+    xSemaphoreGive(telemetry_data_.mutex);
+}
+
+void flight_control_system::telemetry_send_task(void* param) {
+    auto& system = *static_cast<flight_control_system*>(param);
+    static const char *TAG = "ws_send_telemetry";
+    TickType_t period = pdMS_TO_TICKS(50); // 20Hz
+    
+    while (true) {
+        if (system.ws_socketfd_ == -1) {
+            ESP_LOGE(TAG, "Sending telemetry, but sockfd == -1");
+            vTaskDelay(period);
+            continue;   
+        }
+        
+        std::vector<telemetry_snapshot> buffer_copy;
+        xSemaphoreTake(system.telemetry_data_.mutex, portMAX_DELAY);
+        buffer_copy = system.telemetry_data_.buffer;
+        system.telemetry_data_.buffer.clear();
+        xSemaphoreGive(system.telemetry_data_.mutex);
+
+        if (buffer_copy.empty()) {
+            vTaskDelay(period);
+            continue;
+        }
+
+        ESP_LOGI(TAG, "Free heap before JSON creation: %" PRIu32, esp_get_free_heap_size());
+        // Create JSON
+        cJSON *json = cJSON_CreateObject();
+        if (json == NULL) {
+            ESP_LOGE(TAG, "Failed to create JSON object");
+            vTaskDelay(period);
+            continue;
+        }
+        cJSON* array = cJSON_AddArrayToObject(json, "telemetry");
+        if (array == NULL) {
+            ESP_LOGE(TAG, "Failed to create telemetry array");
+            cJSON_Delete(json);
+            vTaskDelay(period);
+            continue;
+        }
+        for (const auto& snap : buffer_copy) {
+            cJSON* item = cJSON_CreateArray();  // Array instead of object
+            if (item == NULL) continue;
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.timestamp));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.attitude.roll));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.attitude.pitch));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.attitude.yaw));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.imu.accel[0]));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.imu.accel[1]));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.imu.accel[2]));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.imu.gyro[0]));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.imu.gyro[1]));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.imu.gyro[2]));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.baro.pressure));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.baro.temperature));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.rate_sp.roll_rate));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.rate_sp.pitch_rate));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.rate_sp.yaw_rate));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.thrust_sp.pitch_thrust));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.thrust_sp.roll_thrust));
+            cJSON_AddItemToArray(item, cJSON_CreateNumber(snap.thrust_sp.yaw_thrust));
+            cJSON_AddItemToArray(array, item);
+        }
+        ESP_LOGI(TAG, "Free heap after JSON object: %" PRIu32, esp_get_free_heap_size());
+        char *msg = cJSON_PrintUnformatted(json);
+        ESP_LOGI(TAG, "Free heap after JSON print: %" PRIu32, esp_get_free_heap_size());
+        cJSON_Delete(json);
+
+        if (msg == NULL) {
+            ESP_LOGE(TAG, "Failed to create JSON string");
+            vTaskDelay(period);
+            continue;
+        }
+        // Send as WebSocket text frame
+        httpd_ws_frame_t ws_pkt = {
+            .type = HTTPD_WS_TYPE_TEXT,
+            .payload = (uint8_t *)msg,
+            .len = strlen(msg)
+        };
+        httpd_ws_send_frame_async(system.ws_server_, system.ws_socketfd_, &ws_pkt);
+        free(msg);
+
+        vTaskDelay(period);  // Send every 100ms
+    }
+}
+
+void flight_control_system::wifi_init_ap() {
+    static const char *TAG = "wifi_init_ap";
+    esp_netif_init();
+    esp_event_loop_create_default();
+    esp_netif_create_default_wifi_ap();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    esp_wifi_init(&cfg);
+
+    wifi_config_t wifi_config = {
+        .ap = {
+            .ssid = "ESP32-AP",
+            .password = "12345678",
+            .ssid_len = strlen("ESP32-AP"),
+            .channel = 1,
+            .authmode = WIFI_AUTH_WPA_WPA2_PSK,
+            .ssid_hidden = 0,
+            .max_connection = 4,
+            .beacon_interval = 100
+        },
+    };
+    if (strlen((char*)wifi_config.ap.password) == 0) {
+        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+    }
+
+    esp_wifi_set_mode(WIFI_MODE_AP);
+    esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
+    esp_wifi_start();
+
+    ESP_LOGI(TAG, "WiFi AP started. SSID: %s", wifi_config.ap.ssid);
+}
+
+esp_err_t flight_control_system::ws_handler(httpd_req_t *req) {
+    auto& system = *static_cast<flight_control_system*>(req->user_ctx);
+
+    static const char *TAG = "ws_handler";
+    if (req->method == HTTP_GET) {
+        system.ws_socketfd_ = httpd_req_to_sockfd(req);
+        ESP_LOGI(TAG, "Handshake done, the new connection was opened, socket fd: %d", system.ws_socketfd_);
+        return ESP_OK;
+    }
+
+    httpd_ws_frame_t ws_pkt;
+    uint8_t buf[128] = {0};
+    memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+    ws_pkt.payload = buf;
+    ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+
+    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, sizeof(buf));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "httpd_ws_recv_frame failed with %d", ret);
+        return ret;
+    }
+
+    if (ws_pkt.type == HTTPD_WS_TYPE_TEXT) {
+        buf[ws_pkt.len] = '\0';  // Null-terminate
+        ESP_LOGI(TAG, "Received: %s", buf);
+        // TODO: Handle incoming PID updates
+    }
+
+    return ESP_OK;
+}
+
+httpd_handle_t flight_control_system::start_webserver() {
+    httpd_handle_t server = NULL;
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.uri_match_fn = httpd_uri_match_wildcard;
+
+    if (httpd_start(&server, &config) == ESP_OK) {
+        // Register WebSocket
+        httpd_uri_t ws = {
+            .uri = "/ws",
+            .method = HTTP_GET,
+            .handler = ws_handler,
+            .user_ctx = this,
+            .is_websocket = true
+        };
+        httpd_register_uri_handler(server, &ws);
+        ESP_LOGI(TAG, "Web server started");
+    }
+    return server;
 }
 
 bool flight_control_system::start() {
@@ -710,18 +944,28 @@ bool flight_control_system::start() {
     }
 
     ret = xTaskCreatePinnedToCore(
-        rc_receiver_task,
-        "rc_receiver_task",
-        4096,
+        telemetry_send_task,
+        "telemetry_send_task",
+        8192,
         this,
-        configMAX_PRIORITIES - 3,
-        &rc_receiver_task_handle_,
-        0
+        configMAX_PRIORITIES - 6,
+        &telemetry_send_task_handle_,
+        1
     );
-    if (ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create RC receiver task");
-        return false;
-    }
+
+    // ret = xTaskCreatePinnedToCore(
+    //     rc_receiver_task,
+    //     "rc_receiver_task",
+    //     4096,
+    //     this,
+    //     configMAX_PRIORITIES - 3,
+    //     &rc_receiver_task_handle_,
+    //     0
+    // );
+    // if (ret != pdPASS) {
+    //     ESP_LOGE(TAG, "Failed to create RC receiver task");
+    //     return false;
+    // }
 
     return true;
 }
