@@ -5,6 +5,8 @@
 #include "esp_log.h"
 
 #include <memory>
+#include <vector>
+#include "esp_http_server.h"
 
 #include "control/pid_controller.hpp"
 #include "control/pid_configs.hpp"
@@ -57,13 +59,21 @@ public:
         SemaphoreHandle_t mutex;
     };
 
+    struct rate_setpoints {
+        float roll_rate;    // deg/s
+        float pitch_rate;   // deg/s
+        float yaw_rate;     // deg/s
+    };
+
     struct protected_rate_setpoint_data {
-        struct {
-            float roll_rate;    // deg/s
-            float pitch_rate;   // deg/s
-            float yaw_rate;     // deg/s
-        } setpoints;
+        rate_setpoints setpoints;
         SemaphoreHandle_t mutex;
+    };
+
+    struct thrust_setpoints {
+        float pitch_thrust;
+        float roll_thrust;
+        float yaw_thrust;
     };
 
     static constexpr uint8_t RC_INPUT_MAX_CHANNELS = 16;
@@ -90,6 +100,9 @@ public:
             attitude_data_.mutex = xSemaphoreCreateMutex();
             rate_setpoint_data_.mutex = xSemaphoreCreateMutex();
             rc_data_.mutex = xSemaphoreCreateMutex();
+
+            telemetry_data_.mutex = xSemaphoreCreateMutex();
+            telemetry_data_.buffer.reserve(telemetry_data_.max_buffer_size);
           }
         
     ~flight_control_system() {
@@ -108,6 +121,12 @@ public:
         if (rc_data_.mutex != nullptr) {
             vSemaphoreDelete(rc_data_.mutex);
         }
+        if (telemetry_data_.mutex != nullptr) {
+            vSemaphoreDelete(telemetry_data_.mutex);
+        }
+        if (ws_server_ != nullptr) {
+            httpd_stop(ws_server_);
+        }
         ESP_LOGI("FlightControl", "Shutting down flight control system");
         vTaskDelay(pdMS_TO_TICKS(100));
     }
@@ -124,6 +143,8 @@ private:
     static constexpr uint32_t BAUD_RATE = 420000;
     static constexpr uint8_t CRSF_BUFFER_SIZE = 25;
     
+    httpd_handle_t ws_server_ = nullptr;
+    int ws_socketfd_ = -1;
 
     const config config_;
     std::unique_ptr<mpu_6050> imu_;
@@ -162,6 +183,30 @@ private:
         float alpha = 0.04f;
         float gyro_scale = 1.0f;
     } filter_params_;
+
+    struct telemetry_snapshot {
+        attitude_estimate attitude;
+        mpu_6050::mpu_reading imu;
+        bmp_280::reading baro;
+        uint16_t rc_channels[RC_INPUT_MAX_CHANNELS];
+        rate_setpoints rate_sp;
+        thrust_setpoints thrust_sp;
+        TickType_t timestamp;
+    };
+
+    struct protected_telemetry_data {
+        std::vector<telemetry_snapshot> buffer;
+        size_t max_buffer_size = 200;  // ~1s at 200Hz; adjust based on RAM
+        SemaphoreHandle_t mutex;
+    } telemetry_data_;
+
+    static esp_err_t ws_handler(httpd_req_t* req);
+    void update_telemetry_snapshot(thrust_setpoints thrust_sp);
+    void wifi_init_ap();
+    httpd_handle_t start_webserver();
+
+    static void telemetry_send_task(void* param);
+    TaskHandle_t telemetry_send_task_handle_;
 
     static void imu_task(void* param);
     TaskHandle_t imu_task_handle_;
