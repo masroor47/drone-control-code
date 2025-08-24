@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Drone Telemetry & PID Control</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        text-align: center;
+      }
+      #graph {
+        width: 800px;
+        height: 400px;
+        margin: auto;
+      }
+      .pid-section {
+        margin: 20px;
+        border: 1px solid #ccc;
+        padding: 10px;
+        display: inline-block;
+      }
+      input {
+        width: 100px;
+        margin: 10px;
+      }
+      button {
+        padding: 10px 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Drone Telemetry & PID Adjustment</h1>
+    <div id="graph"></div>
+    <div>
+      <div class="pid-section">
+        <h3>Rate Roll PID</h3>
+        <label
+          >P:
+          <input type="number" id="rate_roll_p" value="1.0" step="0.1" /></label
+        ><br />
+        <label
+          >I:
+          <input type="number" id="rate_roll_i" value="0.5" step="0.1" /></label
+        ><br />
+        <label
+          >D:
+          <input type="number" id="rate_roll_d" value="0.1" step="0.1" /></label
+        ><br />
+        <button onclick="sendPids()">Update PIDs</button>
+      </div>
+      <div class="pid-section">
+        <h3>Rate Pitch PID</h3>
+        <label
+          >P:
+          <input
+            type="number"
+            id="rate_pitch_p"
+            value="1.0"
+            step="0.1" /></label
+        ><br />
+        <label
+          >I:
+          <input
+            type="number"
+            id="rate_pitch_i"
+            value="0.5"
+            step="0.1" /></label
+        ><br />
+        <label
+          >D:
+          <input
+            type="number"
+            id="rate_pitch_d"
+            value="0.1"
+            step="0.1" /></label
+        ><br />
+        <button onclick="sendPids()">Update PIDs</button>
+      </div>
+      <div class="pid-section">
+        <h3>Rate Yaw PID</h3>
+        <label
+          >P:
+          <input type="number" id="rate_yaw_p" value="1.0" step="0.1" /></label
+        ><br />
+        <label
+          >I:
+          <input type="number" id="rate_yaw_i" value="0.5" step="0.1" /></label
+        ><br />
+        <label
+          >D:
+          <input type="number" id="rate_yaw_d" value="0.1" step="0.1" /></label
+        ><br />
+        <button onclick="sendPids()">Update PIDs</button>
+      </div>
+      <div class="pid-section">
+        <h3>Attitude Pitch PID</h3>
+        <label
+          >P:
+          <input type="number" id="att_pitch_p" value="1.0" step="0.1" /></label
+        ><br />
+        <label
+          >I:
+          <input type="number" id="att_pitch_i" value="0.5" step="0.1" /></label
+        ><br />
+        <label
+          >D:
+          <input type="number" id="att_pitch_d" value="0.1" step="0.1" /></label
+        ><br />
+        <button onclick="sendPids()">Update PIDs</button>
+      </div>
+      <div class="pid-section">
+        <h3>Attitude Yaw PID</h3>
+        <label
+          >P:
+          <input type="number" id="att_yaw_p" value="1.0" step="0.1" /></label
+        ><br />
+        <label
+          >I:
+          <input type="number" id="att_yaw_i" value="0.5" step="0.1" /></label
+        ><br />
+        <label
+          >D:
+          <input type="number" id="att_yaw_d" value="0.1" step="0.1" /></label
+        ><br />
+        <button onclick="sendPids()">Update PIDs</button>
+      </div>
+    </div>
+    <button onclick="downloadCsv()">Download CSV</button>
+    <div id="status"></div>
+    <script>
+      const ws = new WebSocket("ws://192.168.4.1:80/ws");
+      let telemetryData = []; // Accumulate all samples here
+      let plotInitialized = false;
+      ws.onopen = () => {
+        console.log("WebSocket connected");
+        document.getElementById("status").innerText = "Connected to ESP";
+      };
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.telemetry && Array.isArray(data.telemetry)) {
+            // Append batch to accumulation
+            telemetryData = telemetryData.concat(
+              data.telemetry.map((d) => ({
+                timestamp: d[0],
+                attitude: { roll: d[1], pitch: d[2], yaw: d[3] },
+                imu: {
+                  ax: d[4],
+                  ay: d[5],
+                  az: d[6],
+                  gx: d[7],
+                  gy: d[8],
+                  gz: d[9],
+                },
+                barometer: { pressure: d[10], temperature: d[11] },
+                rate_setpoint: { roll: d[12], pitch: d[13], yaw: d[14] },
+                thrust_setpoint: { pitch: d[15], roll: d[16], yaw: d[17] },
+              }))
+            );
+            // Update Plotly graph for attitude estimates
+            const times = telemetryData.map((d) => d.timestamp);
+            // const rolls = telemetryData.map((d) => d.attitude.roll);
+            const pitches = telemetryData.map((d) => d.attitude.pitch);
+            const yaws = telemetryData.map((d) => d.attitude.yaw);
+            if (!plotInitialized) {
+              Plotly.newPlot(
+                "graph",
+                [
+                  //   {
+                  //     x: times,
+                  //     y: rolls,
+                  //     mode: "lines",
+                  //     name: "Roll",
+                  //   },
+                  {
+                    x: times,
+                    y: pitches,
+                    mode: "lines",
+                    name: "Pitch",
+                  },
+                  {
+                    x: times,
+                    y: yaws,
+                    mode: "lines",
+                    name: "Yaw",
+                  },
+                ],
+                {
+                  title: "Attitude Estimates",
+                  xaxis: { title: "Time (ms)" },
+                  yaxis: { title: "Angle" },
+                }
+              );
+              plotInitialized = true;
+            } else {
+              Plotly.update(
+                "graph",
+                { x: [times, times], y: [pitches, yaws] },
+                [1, 2]
+              );
+            }
+          } else if (data.status) {
+            document.getElementById("status").innerText = data.status;
+          }
+        } catch (e) {
+          console.error("Invalid JSON:", event.data);
+        }
+      };
+      ws.onclose = () => {
+        console.log("WebSocket closed");
+        document.getElementById("status").innerText = "Disconnected";
+      };
+      function sendPids() {
+        const msg = {
+          rate_roll: {
+            p: parseFloat(document.getElementById("rate_roll_p").value),
+            i: parseFloat(document.getElementById("rate_roll_i").value),
+            d: parseFloat(document.getElementById("rate_roll_d").value),
+          },
+          rate_pitch: {
+            p: parseFloat(document.getElementById("rate_pitch_p").value),
+            i: parseFloat(document.getElementById("rate_pitch_i").value),
+            d: parseFloat(document.getElementById("rate_pitch_d").value),
+          },
+          rate_yaw: {
+            p: parseFloat(document.getElementById("rate_yaw_p").value),
+            i: parseFloat(document.getElementById("rate_yaw_i").value),
+            d: parseFloat(document.getElementById("rate_yaw_d").value),
+          },
+          att_pitch: {
+            p: parseFloat(document.getElementById("att_pitch_p").value),
+            i: parseFloat(document.getElementById("att_pitch_i").value),
+            d: parseFloat(document.getElementById("att_pitch_d").value),
+          },
+          att_yaw: {
+            p: parseFloat(document.getElementById("att_yaw_p").value),
+            i: parseFloat(document.getElementById("att_yaw_i").value),
+            d: parseFloat(document.getElementById("att_yaw_d").value),
+          },
+        };
+        ws.send(JSON.stringify(msg));
+        document.getElementById("status").innerText = "PID updates sent";
+      }
+      function downloadCsv() {
+        if (telemetryData.length === 0) return alert("No data to download");
+        // Generate CSV header and rows for all fields
+        let csv =
+          "timestamp,attitude_roll,attitude_pitch,attitude_yaw,imu_ax,imu_ay,imu_az,imu_gx,imu_gy,imu_gz,barometer_pressure,barometer_temperature,rate_setpoint_roll,rate_setpoint_pitch,rate_setpoint_yaw,thrust_setpoint_pitch,thrust_setpoint_roll,thrust_setpoint_yaw\n";
+        telemetryData.forEach((d) => {
+          csv += `${d.timestamp},${d.attitude.roll},${d.attitude.pitch},${d.attitude.yaw},${d.imu.ax},${d.imu.ay},${d.imu.az},${d.imu.gx},${d.imu.gy},${d.imu.gz},${d.barometer.pressure},${d.barometer.temperature},${d.rate_setpoint.roll},${d.rate_setpoint.pitch},${d.rate_setpoint.yaw},${d.thrust_setpoint.pitch},${d.thrust_setpoint.roll},${d.thrust_setpoint.yaw}\n`;
+        });
+        const blob = new Blob([csv], { type: "text/csv" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "drone_telemetry.csv";
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    </script>
+  </body>
+</html>
