@@ -5,6 +5,9 @@
 #include "esp_log.h"
 
 #include <memory>
+#include <vector>
+#include <map>
+#include "esp_http_server.h"
 
 #include "control/pid_controller.hpp"
 #include "control/pid_configs.hpp"
@@ -57,13 +60,21 @@ public:
         SemaphoreHandle_t mutex;
     };
 
+    struct rate_setpoints {
+        float roll_rate;    // deg/s
+        float pitch_rate;   // deg/s
+        float yaw_rate;     // deg/s
+    };
+
     struct protected_rate_setpoint_data {
-        struct {
-            float roll_rate;    // deg/s
-            float pitch_rate;   // deg/s
-            float yaw_rate;     // deg/s
-        } setpoints;
+        rate_setpoints setpoints;
         SemaphoreHandle_t mutex;
+    };
+
+    struct thrust_setpoints {
+        float pitch_thrust;
+        float roll_thrust;
+        float yaw_thrust;
     };
 
     static constexpr uint8_t RC_INPUT_MAX_CHANNELS = 16;
@@ -76,6 +87,13 @@ public:
         } data;
         SemaphoreHandle_t mutex;
     };
+    struct pid_entry {
+        const char* name;
+        pid_controller::config* cfg;
+        const char* kp_key;
+        const char* ki_key;
+        const char* kd_key;
+    };
 
     bool get_rc_channels(uint16_t*, uint16_t*, TickType_t*); 
 
@@ -83,13 +101,15 @@ public:
         : config_(cfg),
           imu_(nullptr),
           barometer_(nullptr),
-          servos_(),
-          pid_configs_(flight_control_config::default_pid_configs()) {
+          servos_() {
             imu_data_.mutex = xSemaphoreCreateMutex();
             barometer_data_.mutex = xSemaphoreCreateMutex();
             attitude_data_.mutex = xSemaphoreCreateMutex();
             rate_setpoint_data_.mutex = xSemaphoreCreateMutex();
             rc_data_.mutex = xSemaphoreCreateMutex();
+
+            telemetry_data_.mutex = xSemaphoreCreateMutex();
+            telemetry_data_.buffer.reserve(telemetry_data_.max_buffer_size);
           }
         
     ~flight_control_system() {
@@ -108,6 +128,12 @@ public:
         if (rc_data_.mutex != nullptr) {
             vSemaphoreDelete(rc_data_.mutex);
         }
+        if (telemetry_data_.mutex != nullptr) {
+            vSemaphoreDelete(telemetry_data_.mutex);
+        }
+        if (ws_server_ != nullptr) {
+            httpd_stop(ws_server_);
+        }
         ESP_LOGI("FlightControl", "Shutting down flight control system");
         vTaskDelay(pdMS_TO_TICKS(100));
     }
@@ -124,6 +150,8 @@ private:
     static constexpr uint32_t BAUD_RATE = 420000;
     static constexpr uint8_t CRSF_BUFFER_SIZE = 25;
     
+    httpd_handle_t ws_server_ = nullptr;
+    int ws_socketfd_ = -1;
 
     const config config_;
     std::unique_ptr<mpu_6050> imu_;
@@ -140,9 +168,19 @@ private:
     std::unique_ptr<pid_controller> roll_rate_pid_;
     std::unique_ptr<pid_controller> pitch_rate_pid_;
     std::unique_ptr<pid_controller> yaw_rate_pid_;
-    
+
     // PID configurations
     pid_configs pid_configs_;
+
+    std::array<pid_entry, 5> pid_entries_ = {{
+        {"pitch_att", &pid_configs_.pitch_attitude, "pa_kp", "pa_ki", "pa_kd"},
+        {"yaw_att",   &pid_configs_.yaw_attitude,   "ya_kp", "ya_ki", "ya_kd"},
+        {"roll_rate", &pid_configs_.roll_rate,      "rr_kp", "rr_ki", "rr_kd"},
+        {"pitch_rate",&pid_configs_.pitch_rate,     "pr_kp", "pr_ki", "pr_kd"},
+        {"yaw_rate",  &pid_configs_.yaw_rate,       "yr_kp", "yr_ki", "yr_kd"}
+    }};
+
+    std::map<pid_controller::config*, pid_controller*> pid_config_controller_map_;
 
     protected_imu_data imu_data_;
     protected_baro_data barometer_data_;
@@ -162,6 +200,30 @@ private:
         float alpha = 0.04f;
         float gyro_scale = 1.0f;
     } filter_params_;
+
+    struct telemetry_snapshot {
+        attitude_estimate attitude;
+        mpu_6050::mpu_reading imu;
+        bmp_280::reading baro;
+        uint16_t rc_channels[RC_INPUT_MAX_CHANNELS];
+        rate_setpoints rate_sp;
+        thrust_setpoints thrust_sp;
+        TickType_t timestamp;
+    };
+
+    struct protected_telemetry_data {
+        std::vector<telemetry_snapshot> buffer;
+        size_t max_buffer_size = 50;  //
+        SemaphoreHandle_t mutex;
+    } telemetry_data_;
+
+    static esp_err_t ws_handler(httpd_req_t* req);
+    void update_telemetry_snapshot(thrust_setpoints thrust_sp);
+    void wifi_init_ap();
+    httpd_handle_t start_webserver();
+
+    static void telemetry_send_task(void* param);
+    TaskHandle_t telemetry_send_task_handle_;
 
     static void imu_task(void* param);
     TaskHandle_t imu_task_handle_;
