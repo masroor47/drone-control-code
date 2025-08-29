@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <vector>
+#include <map>
 #include "esp_http_server.h"
 
 #include "control/pid_controller.hpp"
@@ -86,6 +87,13 @@ public:
         } data;
         SemaphoreHandle_t mutex;
     };
+    struct pid_entry {
+        const char* name;
+        pid_controller::config* cfg;
+        const char* kp_key;
+        const char* ki_key;
+        const char* kd_key;
+    };
 
     bool get_rc_channels(uint16_t*, uint16_t*, TickType_t*); 
 
@@ -93,8 +101,7 @@ public:
         : config_(cfg),
           imu_(nullptr),
           barometer_(nullptr),
-          servos_(),
-          pid_configs_(flight_control_config::default_pid_configs()) {
+          servos_() {
             imu_data_.mutex = xSemaphoreCreateMutex();
             barometer_data_.mutex = xSemaphoreCreateMutex();
             attitude_data_.mutex = xSemaphoreCreateMutex();
@@ -161,9 +168,19 @@ private:
     std::unique_ptr<pid_controller> roll_rate_pid_;
     std::unique_ptr<pid_controller> pitch_rate_pid_;
     std::unique_ptr<pid_controller> yaw_rate_pid_;
-    
+
     // PID configurations
     pid_configs pid_configs_;
+
+    std::array<pid_entry, 5> pid_entries_ = {{
+        {"pitch_att", &pid_configs_.pitch_attitude, "pa_kp", "pa_ki", "pa_kd"},
+        {"yaw_att",   &pid_configs_.yaw_attitude,   "ya_kp", "ya_ki", "ya_kd"},
+        {"roll_rate", &pid_configs_.roll_rate,      "rr_kp", "rr_ki", "rr_kd"},
+        {"pitch_rate",&pid_configs_.pitch_rate,     "pr_kp", "pr_ki", "pr_kd"},
+        {"yaw_rate",  &pid_configs_.yaw_rate,       "yr_kp", "yr_ki", "yr_kd"}
+    }};
+
+    std::map<pid_controller::config*, pid_controller*> pid_config_controller_map_;
 
     protected_imu_data imu_data_;
     protected_baro_data barometer_data_;
@@ -196,7 +213,7 @@ private:
 
     struct protected_telemetry_data {
         std::vector<telemetry_snapshot> buffer;
-        size_t max_buffer_size = 200;  // ~1s at 200Hz; adjust based on RAM
+        size_t max_buffer_size = 50;  //
         SemaphoreHandle_t mutex;
     } telemetry_data_;
 
