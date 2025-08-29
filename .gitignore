@@ -17,6 +17,7 @@ build/
 
 # vscode
 .vscode/
+.prettierrc.json
 
 # esp-idf
 sdkconfig
