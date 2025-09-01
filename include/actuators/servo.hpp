@@ -45,9 +45,7 @@ public:
     void set_angle(float angle) {
         // Constrain angle
         // ESP_LOGI(TAG, "Setting angle to %f", angle);
-        if (angle < config_.min_angle) angle = config_.min_angle;
-        if (angle > config_.max_angle) angle = config_.max_angle;
-        if (abs(angle) > config_.angle_limit) angle = config_.angle_limit * (angle < 0 ? -1 : 1);
+        angle = std::clamp(angle, -config_.angle_limit, config_.angle_limit);
         
         angle += config_.calib_offset;
 

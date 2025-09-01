@@ -23,9 +23,13 @@ public:
 
     float update(float setpoint, float measurement, float dt);
     void reset();
+    void update_config(const config& new_cfg) {
+        config_ = new_cfg;
+        reset();
+    }
 
 private:
-    const config config_;
+    config config_;
     float prev_error_;
     float integrator_;
     float filtered_derivative_;
