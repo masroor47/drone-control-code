@@ -15,20 +15,36 @@ public:
     static constexpr uint16_t RC_MID = 1500;
     
     // Armed channel thresholds
-    static constexpr uint16_t ARMED_THRESHOLD = 1800;  // Above this is considered armed
+    static constexpr uint16_t BOOL_THRESHOLD = 1800;  // Above this is considered armed
 
     struct mapped_channels {
         float roll_angle_deg;
         float pitch_angle_deg;
         float yaw_rate_rad_s;
         float throttle_percent;
-        bool armed;
+        bool armed; // also SA button
+        bool SD;
         float wheel;
+        bool connected;
     };
 
-    static mapped_channels map_channels(const uint16_t* rc_channels) {
-        mapped_channels mapped;
-        
+    static mapped_channels map_channels(const uint16_t* rc_channels, uint16_t num_channels = 10, TickType_t last_update = 0, TickType_t current_tick = 0) {
+        mapped_channels mapped = {};
+
+        const TickType_t timeout_ticks = pdMS_TO_TICKS(200);  // Adjust as needed (100-500ms typical)
+        mapped.connected = (current_tick - last_update < timeout_ticks) && (num_channels > 0);
+
+        if (!mapped.connected) {
+            mapped.roll_angle_deg = 0.0f;
+            mapped.pitch_angle_deg = 0.0f;
+            mapped.yaw_rate_rad_s = 0.0f;
+            mapped.throttle_percent = 0.0f;
+            mapped.armed = false;
+            mapped.SD = false;
+            mapped.wheel = 0.0f;
+            return mapped;
+        }
+
         // Map roll and pitch from RC input to angle range
         mapped.roll_angle_deg = map_range_symmetric(
             rc_channels[0], RC_MIN, RC_MAX, -MAX_ANGLE_DEG, MAX_ANGLE_DEG);
@@ -49,7 +65,8 @@ public:
             rc_channels[3], RC_MIN, RC_MAX, -MAX_YAW_RATE_RAD_S, MAX_YAW_RATE_RAD_S);
             
         // Map armed channel to boolean
-        mapped.armed = rc_channels[4] > ARMED_THRESHOLD;
+        mapped.armed = rc_channels[4] > BOOL_THRESHOLD;
+        mapped.SD = rc_channels[7] > BOOL_THRESHOLD;
 
         mapped.wheel = map_range(rc_channels[9], RC_MIN, RC_MAX, 0.0f, 1.0f);
         

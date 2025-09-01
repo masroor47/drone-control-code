@@ -166,7 +166,7 @@ bool flight_control_system::init() {
         .min_angle = -90.0f,
         .max_angle = 90.0f,
         .calib_offset = 0.0f,
-        .angle_limit = 45.0f
+        .angle_limit = 40.0f
     };
 
     const std::array<gpio_num_t, 4> servo_pins = {
@@ -514,14 +514,28 @@ void flight_control_system::rate_control_task(void* param) {
     const int period_ms = 20;
     const TickType_t period = pdMS_TO_TICKS(5);  // 200Hz
 
+    TickType_t timestamp;
+
     uint16_t rc_channels[RC_INPUT_MAX_CHANNELS];
-    uint16_t num_channels;
+    uint16_t num_channels = 0;
 
     float throttle_percent;
-    
-    float test_angle = 0;
 
-    TickType_t timestamp;
+    static float ramp_cmd = 0.0f;
+    static bool left_prev = false;
+    static const float RAMP_TARGET_PERCENT = 25.0f;
+    static const float TAU_UP_S = 0.5f;
+    static const float TAU_DOWN_S = 0.4f;
+    const float DT_S = 0.005f;
+
+    // For thrust kick
+    static bool sd_prev = false;
+    static bool kick_active = false;
+    static float kick_t = 0.0f;
+    static float KICK_DURATION_S = 0.50f;
+    static const float KICK_MAX = -0.5f;
+
+    float kick_val = 0.0f;
 
     float roll_rate_sp = 0;
     float pitch_rate_sp = 0;
@@ -532,9 +546,30 @@ void flight_control_system::rate_control_task(void* param) {
         if (xSemaphoreTake(system.rc_data_.mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
             memcpy(rc_channels, system.rc_data_.data.channels, 
                    sizeof(uint16_t) * 10);
+            num_channels = system.rc_data_.data.num_channels;
+            TickType_t last_update = system.rc_data_.data.last_update;
             xSemaphoreGive(system.rc_data_.mutex);
+            
+            TickType_t current_tick = xTaskGetTickCount();
+            mapped_channels = rc_mapper::map_channels(rc_channels, num_channels, last_update, current_tick);
         }
-        mapped_channels = rc_mapper::map_channels(rc_channels);
+
+        // Rising edge detection: trigger one-shot
+        if (mapped_channels.SD && !sd_prev && !kick_active) {
+            kick_active = true;
+            kick_t = 0.0f;
+        }
+        sd_prev = mapped_channels.SD;
+        if (kick_active) {
+            kick_t += DT_S;
+            kick_val = KICK_MAX;
+            if (kick_t >= KICK_DURATION_S) {
+                kick_active = false;
+                kick_t = 0.0f;
+                kick_val = 0.0f;
+            }
+        }
+
         // if (tick % 10 == 0) {
         //     ESP_LOGI(TAG, "RC channels: %d, %d, %d, %d, %d; Mapped RC: roll=%.1f° pitch=%.1f° throttle=%.1f%% yaw=%.1f rad/s armed=%d wheel=%.1f",
         //         rc_channels[0], rc_channels[1], rc_channels[2], rc_channels[3], rc_channels[4],
@@ -548,12 +583,12 @@ void flight_control_system::rate_control_task(void* param) {
         // }
 
         // Get latest rate setpoints
-        if (xSemaphoreTake(system.rate_setpoint_data_.mutex, pdMS_TO_TICKS(5)) == pdTRUE) {;
-            roll_rate_sp = system.rate_setpoint_data_.setpoints.roll_rate;
-            pitch_rate_sp = system.rate_setpoint_data_.setpoints.pitch_rate;
-            yaw_rate_sp = system.rate_setpoint_data_.setpoints.yaw_rate;
-            xSemaphoreGive(system.rate_setpoint_data_.mutex);
-        }
+        // if (xSemaphoreTake(system.rate_setpoint_data_.mutex, pdMS_TO_TICKS(5)) == pdTRUE) {;
+        //     roll_rate_sp = system.rate_setpoint_data_.setpoints.roll_rate; // don't need until we implement global heading lock with compass
+        //     pitch_rate_sp = system.rate_setpoint_data_.setpoints.pitch_rate;
+        //     yaw_rate_sp = system.rate_setpoint_data_.setpoints.yaw_rate;
+        //     xSemaphoreGive(system.rate_setpoint_data_.mutex);
+        // }
 
         // Get latest gyro data
         mpu_6050::mpu_reading gyro_data;
@@ -562,55 +597,49 @@ void flight_control_system::rate_control_task(void* param) {
         gyro_data = system.imu_data_.latest_reading;
         xSemaphoreGive(system.imu_data_.mutex);
         
-        // pitch_rate_sp = -mapped_channels.pitch_angle_deg * 0.5f; // Convert to rate
-        // yaw_rate_sp = 0.0f;
-        // yaw_rate_sp = mapped_channels.roll_angle_deg * 0.5f; // Convert to rate
         roll_rate_sp = mapped_channels.yaw_rate_rad_s;
-        // roll_rate_sp = 0.0f;
-
-        // pitch_rate_sp = 0.0f;
-        // yaw_rate_sp = 0.0f;
-
-        // precession correction here, not in rate control
-        float theta_rad = mapped_channels.wheel * M_PI / 2;
-
-        float pitch_rate_sp_coupled = pitch_rate_sp * cos(theta_rad) + yaw_rate_sp * sin(theta_rad);
-        float yaw_rate_sp_coupled = -pitch_rate_sp * sin(theta_rad) + yaw_rate_sp * cos(theta_rad);
-
 
         // Run rate PIDs
-        float roll_thrust = system.roll_rate_pid_->update(
-            roll_rate_sp, gyro_data.gyro[1], 0.005f);
+        // float roll_thrust = system.roll_rate_pid_->update(
+        //     roll_rate_sp, gyro_data.gyro[1], 0.005f);
 
-        float pitch_thrust = -system.pitch_rate_pid_->update(
-            pitch_rate_sp_coupled, -gyro_data.gyro[0], 0.005f);
+        pitch_rate_sp = kick_val;
 
-        float yaw_thrust = -system.yaw_rate_pid_->update(
-            yaw_rate_sp_coupled, -gyro_data.gyro[2], 0.005f);
+        float pitch_thrust = system.pitch_rate_pid_->update(
+            pitch_rate_sp, -gyro_data.gyro[0], 0.005f);
 
-        // float pitch_thrust = mapped_channels.pitch_angle_deg;
-        // float yaw_thrust = -mapped_channels.roll_angle_deg;
-        // yaw_thrust = 0;
+        float yaw_thrust = system.yaw_rate_pid_->update(
+            yaw_rate_sp, -gyro_data.gyro[2], 0.005f);
 
-        throttle_percent = mapped_channels.throttle_percent;
+        float roll_thrust = 0.0f;
+        // float pitch_thrust = kick_val;
+        // float yaw_thrust = 0.0f;
+
+
+        const float target = mapped_channels.armed ? RAMP_TARGET_PERCENT : 0.0f;
+        const bool going_up = (target > ramp_cmd);
+        const float tau = going_up ? TAU_UP_S : TAU_DOWN_S;
+        const float alpha = DT_S / (tau + DT_S);  // stable discretization
+        ramp_cmd += alpha * (target - ramp_cmd);
+
+        // throttle_percent = mapped_channels.throttle_percent;
+        throttle_percent = std::clamp(ramp_cmd, 0.0f, rc_mapper::MAX_THROTTLE_PERCENT);
         system.esc_->set_throttle(throttle_percent);
 
-        float K_PRECESSION = 0.0f;
-        // float K_PRECESSION = mapped_channels.wheel * 100.0f;
-        // const float precession_gain = K_PRECESSION;// * throttle_percent;  // Experimentally determined
-        // const float comp_pitch = pitch_thrust*(1-precession_gain) + precession_gain * yaw_thrust;
-        // const float comp_yaw = yaw_thrust*(1-precession_gain) - precession_gain * pitch_thrust;
-        const float comp_pitch = pitch_thrust + K_PRECESSION * gyro_data.gyro[2]; // perpendicular component for precession
-        const float comp_yaw = yaw_thrust + K_PRECESSION * gyro_data.gyro[0]; // perpendicular component for precession
+        const float FF_GAIN_PITCH = 25.0f;
+        const float FF_GAIN_YAW = 15.0f;
+
+        float comp_pitch = pitch_thrust - FF_GAIN_PITCH * gyro_data.gyro[2];
+        float comp_yaw = yaw_thrust + FF_GAIN_YAW * gyro_data.gyro[0];
 
         // Torque compensation
         float K_TORQUE = 0.35f;
         float counter_torque_angle = throttle_percent * K_TORQUE;
         
-        const float servo1_cmd = -comp_pitch - comp_yaw + roll_thrust - counter_torque_angle;
-        const float servo2_cmd =  comp_pitch - comp_yaw + roll_thrust - counter_torque_angle;
-        const float servo3_cmd =  comp_pitch + comp_yaw + roll_thrust - counter_torque_angle;
-        const float servo4_cmd = -comp_pitch + comp_yaw + roll_thrust - counter_torque_angle;
+        const float servo1_cmd =  comp_pitch + comp_yaw + roll_thrust - counter_torque_angle;
+        const float servo2_cmd = -comp_pitch + comp_yaw + roll_thrust - counter_torque_angle;
+        const float servo3_cmd = -comp_pitch - comp_yaw + roll_thrust - counter_torque_angle;
+        const float servo4_cmd =  comp_pitch - comp_yaw + roll_thrust - counter_torque_angle;
 
         // ESP_LOGI(TAG, "motor: %2f%%, gyro: %.2f, %.2f, %.2f; pitch_th: %.2f, yaw_th: %.2f; roll_th: %.2f,  comp_pitch: %.2f, comp_yaw: %.2f",
         //     throttle_percent, gyro_data.gyro[0], gyro_data.gyro[1], gyro_data.gyro[2], pitch_thrust, yaw_thrust, roll_thrust, comp_pitch, comp_yaw
@@ -632,14 +661,26 @@ void flight_control_system::rate_control_task(void* param) {
         system.servos_[2]->set_angle(servo3_cmd);
         system.servos_[3]->set_angle(servo4_cmd);
 
+        rate_setpoints rate_sp = {
+            .roll_rate = roll_rate_sp,
+            .pitch_rate = pitch_rate_sp,
+            .yaw_rate = yaw_rate_sp
+        };
         thrust_setpoints thrust_sp = {
             .pitch_thrust = comp_pitch,
             .roll_thrust = roll_thrust,
             .yaw_thrust = comp_yaw
         };
 
+        servo_commands cmds = {
+            .servo1 = servo1_cmd,
+            .servo2 = servo2_cmd,
+            .servo3 = servo3_cmd,
+            .servo4 = servo4_cmd
+        };
+
         if (tick % 2 == 0) 
-            system.update_telemetry_snapshot(thrust_sp);
+            system.update_telemetry_snapshot(gyro_data, rc_channels, rate_sp, thrust_sp, cmds, throttle_percent);
 
         vTaskDelayUntil(&last_wake_time, period);
     }
@@ -687,8 +728,9 @@ void flight_control_system::rc_receiver_task(void* param) {
                     fcs->rc_data_.data.last_update = xTaskGetTickCount();
                     xSemaphoreGive(fcs->rc_data_.mutex);
 
-                    // if (++tick % 10 == 0) {
-                    //     ESP_LOGI(TAG, "Channels: %d, %d, %d, %d, %d, %d, %d, %d, %2d, %2d",
+                    // if (++tick % 5 == 0) {
+                    //     ESP_LOGI(TAG, "num_channels: %d, last_update: %d, Channels: %d, %d, %d, %d, %d, %d, %d, %d, %2d, %2d",
+                    //         num_channels, (int)fcs->rc_data_.data.last_update,
                     //         temp_channels[0], temp_channels[1], temp_channels[2], temp_channels[3],
                     //         temp_channels[4], temp_channels[5], temp_channels[6], temp_channels[7],
                     //         temp_channels[8], temp_channels[9]
@@ -702,7 +744,12 @@ void flight_control_system::rc_receiver_task(void* param) {
     }
 }
 
-void flight_control_system::update_telemetry_snapshot(thrust_setpoints thrust_sp) {
+void flight_control_system::update_telemetry_snapshot(mpu_6050::mpu_reading imu_reading,
+                                                      uint16_t *rc_channels,
+                                                      rate_setpoints rate_sp,
+                                                      thrust_setpoints thrust_sp,
+                                                      servo_commands cmds,
+                                                      float throttle_percent) {
     telemetry_snapshot snap;
     snap.timestamp = xTaskGetTickCount();
 
@@ -711,23 +758,22 @@ void flight_control_system::update_telemetry_snapshot(thrust_setpoints thrust_sp
     snap.attitude = attitude_data_.latest_estimate;
     xSemaphoreGive(attitude_data_.mutex);
 
-    xSemaphoreTake(imu_data_.mutex, portMAX_DELAY);
-    snap.imu = imu_data_.latest_reading;
-    xSemaphoreGive(imu_data_.mutex);
+    snap.imu = imu_reading;
 
-    xSemaphoreTake(barometer_data_.mutex, portMAX_DELAY);
-    snap.baro = barometer_data_.latest_reading;
-    xSemaphoreGive(barometer_data_.mutex);
+    // Not using for now
+    // xSemaphoreTake(barometer_data_.mutex, portMAX_DELAY);
+    // snap.baro = barometer_data_.latest_reading;
+    // xSemaphoreGive(barometer_data_.mutex);
 
-    xSemaphoreTake(rc_data_.mutex, portMAX_DELAY);
-    memcpy(snap.rc_channels, rc_data_.data.channels, sizeof(uint16_t) * 10);
-    xSemaphoreGive(rc_data_.mutex);
+    memcpy(snap.rc_channels, rc_channels, sizeof(uint16_t) * 10);
 
-    xSemaphoreTake(rate_setpoint_data_.mutex, portMAX_DELAY);
-    snap.rate_sp = rate_setpoint_data_.setpoints;
-    xSemaphoreGive(rate_setpoint_data_.mutex);
+    snap.rate_sp = rate_sp;
 
     snap.thrust_sp = thrust_sp;
+
+    snap.servo_cmds = cmds;
+
+    snap.throttle_percent = throttle_percent;
 
     xSemaphoreTake(telemetry_data_.mutex, portMAX_DELAY);
     telemetry_data_.buffer.push_back(snap);
@@ -806,14 +852,19 @@ void flight_control_system::telemetry_send_task(void* param) {
             safe_add(item, -snap.imu.gyro[0]);
             safe_add(item, snap.imu.gyro[1]);
             safe_add(item, -snap.imu.gyro[2]);
-            safe_add(item, snap.baro.pressure);
-            safe_add(item, snap.baro.temperature);
+            // safe_add(item, snap.baro.pressure);
+            // safe_add(item, snap.baro.temperature);
             safe_add(item, snap.rate_sp.roll_rate);
             safe_add(item, snap.rate_sp.pitch_rate);
             safe_add(item, snap.rate_sp.yaw_rate);
             safe_add(item, snap.thrust_sp.pitch_thrust);
             safe_add(item, snap.thrust_sp.roll_thrust);
             safe_add(item, snap.thrust_sp.yaw_thrust);
+            safe_add(item, snap.servo_cmds.servo1);
+            safe_add(item, snap.servo_cmds.servo2);
+            safe_add(item, snap.servo_cmds.servo3);
+            safe_add(item, snap.servo_cmds.servo4);
+            safe_add(item, snap.throttle_percent);
 
             cJSON_AddItemToArray(data, item);
         
@@ -1138,19 +1189,19 @@ bool flight_control_system::start() {
         1
     );
 
-    // ret = xTaskCreatePinnedToCore(
-    //     rc_receiver_task,
-    //     "rc_receiver_task",
-    //     4096,
-    //     this,
-    //     configMAX_PRIORITIES - 3,
-    //     &rc_receiver_task_handle_,
-    //     0
-    // );
-    // if (ret != pdPASS) {
-    //     ESP_LOGE(TAG, "Failed to create RC receiver task");
-    //     return false;
-    // }
+    ret = xTaskCreatePinnedToCore(
+        rc_receiver_task,
+        "rc_receiver_task",
+        4096,
+        this,
+        configMAX_PRIORITIES - 3,
+        &rc_receiver_task_handle_,
+        0
+    );
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create RC receiver task");
+        return false;
+    }
 
     return true;
 }
