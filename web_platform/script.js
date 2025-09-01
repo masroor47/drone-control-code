@@ -139,7 +139,11 @@ function populateForms(data) {
 
 function handlePidAck(data) {
   for (const [name, cfg] of Object.entries(data)) {
-    document.getElementById(`ack_${name}`).innerText = "Updated!";
+    const ackElement = document.getElementById(`ack_${name}`);
+    ackElement.innerText = "Updated!";
+    setTimeout(() => {
+      ackElement.innerText = "";
+    }, 3000);
     // optional: repopulate values to confirm what was saved
     // document.getElementById(`${name}_p`).value = cfg.kp;
     // document.getElementById(`${name}_i`).value = cfg.ki;
@@ -223,7 +227,6 @@ ws.onmessage = (event) => {
         handleTelemetry(msg.data);
         break;
       case "pid_config":
-        console.log("Received PID config:", msg.data);
         populateForms(msg.data);
         break;
       case "pid_ack":

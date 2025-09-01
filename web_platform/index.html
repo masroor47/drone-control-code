@@ -46,25 +46,25 @@
       <div>
         <div class="pid-section">
           <h3>Rate Roll PID</h3>
-          <label>P: <input type="number" id="roll_rate_p" value="1.0" step="0.1" /></label><br />
-          <label>I: <input type="number" id="roll_rate_i" value="0.5" step="0.1" /></label><br />
-          <label>D: <input type="number" id="roll_rate_d" value="0.1" step="0.1" /></label><br />
+          <label>P: <input type="number" id="roll_rate_p" value="0.0" step="0.1" /></label><br />
+          <label>I: <input type="number" id="roll_rate_i" value="0.0" step="0.1" /></label><br />
+          <label>D: <input type="number" id="roll_rate_d" value="0.0" step="0.1" /></label><br />
           <button onclick="sendPids('roll_rate')">Update</button>
           <span id="ack_roll_rate"></span>
         </div>
         <div class="pid-section">
           <h3>Rate Pitch PID</h3>
-          <label>P: <input type="number" id="pitch_rate_p" value="1.0" step="0.1" /></label><br />
-          <label>I: <input type="number" id="pitch_rate_i" value="0.5" step="0.1" /></label><br />
-          <label>D: <input type="number" id="pitch_rate_d" value="0.1" step="0.1" /></label><br />
+          <label>P: <input type="number" id="pitch_rate_p" value="0.0" step="0.1" /></label><br />
+          <label>I: <input type="number" id="pitch_rate_i" value="0.0" step="0.1" /></label><br />
+          <label>D: <input type="number" id="pitch_rate_d" value="0.0" step="0.1" /></label><br />
           <button onclick="sendPids('pitch_rate')">Update</button>
           <span id="ack_pitch_rate"></span>
         </div>
         <div class="pid-section">
           <h3>Rate Yaw PID</h3>
-          <label>P: <input type="number" id="yaw_rate_p" value="1.0" step="0.1" /></label><br />
-          <label>I: <input type="number" id="yaw_rate_i" value="0.5" step="0.1" /></label><br />
-          <label>D: <input type="number" id="yaw_rate_d" value="0.1" step="0.1" /></label><br />
+          <label>P: <input type="number" id="yaw_rate_p" value="0.0" step="0.1" /></label><br />
+          <label>I: <input type="number" id="yaw_rate_i" value="0.0" step="0.1" /></label><br />
+          <label>D: <input type="number" id="yaw_rate_d" value="0.0" step="0.1" /></label><br />
           <button onclick="sendPids('yaw_rate')">Update</button>
           <span id="ack_yaw_rate"></span>
         </div>
@@ -72,18 +72,17 @@
       <div>
         <div class="pid-section">
           <h3>Attitude Pitch PID</h3>
-          <label>P: <input type="number" id="pitch_att_p" value="1.0" step="0.1" /></label><br />
-          <label>I: <input type="number" id="pitch_att_i" value="0.5" step="0.1" /></label>
-          <br />
-          <label>D: <input type="number" id="pitch_att_d" value="0.1" step="0.1" /></label><br />
+          <label>P: <input type="number" id="pitch_att_p" value="0.0" step="0.1" /></label><br />
+          <label>I: <input type="number" id="pitch_att_i" value="0.0" step="0.1" /></label><br />
+          <label>D: <input type="number" id="pitch_att_d" value="0.0" step="0.1" /></label><br />
           <button onclick="sendPids('pitch_att')">Update</button>
           <span id="ack_pitch_att"></span>
         </div>
         <div class="pid-section">
           <h3>Attitude Yaw PID</h3>
-          <label>P: <input type="number" id="yaw_att_p" value="1.0" step="0.1" /></label><br />
-          <label>I: <input type="number" id="yaw_att_i" value="0.5" step="0.1" /></label><br />
-          <label>D: <input type="number" id="yaw_att_d" value="0.1" step="0.1" /></label><br />
+          <label>P: <input type="number" id="yaw_att_p" value="0.0" step="0.1" /></label><br />
+          <label>I: <input type="number" id="yaw_att_i" value="0.0" step="0.1" /></label><br />
+          <label>D: <input type="number" id="yaw_att_d" value="0.0" step="0.1" /></label><br />
           <button onclick="sendPids('yaw_att')">Update</button>
           <span id="ack_yaw_att"></span>
         </div>
